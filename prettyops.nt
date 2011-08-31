@@ -22,7 +22,8 @@ void freeElements(Element[] array) {
 
 class Operator {
   Operator[] childs;
-  void init(int arity) { if arity childs = new Operator[] arity; }
+  string name;
+  void init(int arity, string name) { if arity childs = new Operator[] arity; this.name = name; }
   void process(Element[] args) { raise-error new Error "Unimplemented: Operator::process"; }
 }
 
@@ -33,25 +34,27 @@ float randf() { return std.random.base.randf(rng); }
 void initRNG(int seed) { rng = getPRNG seed; }
 
 class Variable-X : Operator {
-  void init() super.init 0;
+  void init() super.init (0, "Variable-X");
   void process(Element[] args) {
     for int i <- 0..args.length { args[i].col = (*vec3f* :&args[i].pos).xxx; }
   }
 }
 
 class Variable-Y : Operator {
-  void init() super.init 0;
+  void init() super.init (0, "Variable-Y");
   void process(Element[] args) {
     for int i <- 0..args.length { args[i].col = (*vec3f* :&args[i].pos).yyy; }
   }
 }
 
+alias randrange = 1.1;
+
 class Matrix : Operator {
   float x 6 parts;
   void init() {
-    super.init 0;
+    super.init (0, "Matrix");
     for int i <- 0..6
-      parts[i] = 1.5 - randf() * 3;
+      parts[i] = randrange - randf() * randrange * 2;
   }
   void process(Element[] args) {
     for int i <- 0..args.length {
@@ -68,12 +71,12 @@ class Matrix : Operator {
 class PosMatrix : Operator {
   float x 6 parts;
   void init() {
-    super.init 1;
-    parts[0] = 1.5 - randf() * 3;
-    parts[1] = 1.5 - randf() * 3;
+    super.init (1, "PosMatrix");
+    parts[0] = randrange - randf() * randrange * 2;
+    parts[1] = randrange - randf() * randrange * 2;
     parts[2] = 0.5 - randf();
-    parts[3] = 1.5 - randf() * 3;
-    parts[4] = 1.5 - randf() * 3;
+    parts[3] = randrange - randf() * randrange * 2;
+    parts[4] = randrange - randf() * randrange * 2;
     parts[5] = 0.5 - randf();
   }
   void process(Element[] args) {
@@ -100,7 +103,7 @@ class PosMatrix : Operator {
 
 class SinCos : Operator {
   void init() {
-    super.init 0;
+    super.init (0, "SinCos");
   }
   void process(Element[] args) {
     for int i <- 0..args.length {
@@ -113,9 +116,9 @@ class SinCos : Operator {
 class ColMatrix : Operator {
   float x 9 parts;
   void init() {
-    super.init 1;
+    super.init (1, "ColMatrix");
     for int i <- 0..9
-      parts[i] = 1.5 - randf() * 3;
+      parts[i] = randrange - randf() * randrange * 2;
   }
   void process(Element[] args) {
     auto copy = allocElements();
@@ -137,7 +140,7 @@ class ColMatrix : Operator {
 
 class ComplexSquare : Operator {
   void init() {
-    super.init 1;
+    super.init (1, "ComplexSquare");
   }
   void process(Element[] args) {
     auto copy = allocElements();
@@ -161,7 +164,7 @@ class ComplexSquare : Operator {
 class Constant : Operator {
   vec3f value;
   void init() {
-    super.init 0;
+    super.init (0, "Constant");
     value = vec3f(randf(), randf(), randf());
   }
   // string toString() return "Constant $value";
@@ -172,7 +175,7 @@ class Constant : Operator {
 }
 
 class Sum : Operator {
-  void init() super.init 2;
+  void init() super.init (2, "Sum");
   string toString() { return "Sum($$childs[0], $$childs[1])"; }
   void process(Element[] args) {
     auto copy1 = allocElements(), copy2 = allocElements();
@@ -191,7 +194,7 @@ class Sum : Operator {
 }
 
 class Product : Operator {
-  void init() super.init 2;
+  void init() super.init (2, "Product");
   string toString() { return "Product($$childs[0], $$childs[1])"; }
   void process(Element[] args) {
     auto copy1 = allocElements(), copy2 = allocElements();
@@ -211,7 +214,7 @@ class Product : Operator {
 
 extern(C) float fmodf(float, float);
 class Mod : Operator {
-  void init() super.init 2;
+  void init() super.init (2, "Mod");
   string toString() { return "Mod($$childs[0], $$childs[1])"; }
   void process(Element[] args) {
     auto copy1 = allocElements(), copy2 = allocElements();
@@ -230,7 +233,7 @@ class Mod : Operator {
 }
 
 class Well : Operator {
-  void init() super.init 1;
+  void init() super.init (1, "Well");
   string toString() { return "Well $$childs[0]"; }
   void process(Element[] args) {
     auto copy = allocElements();
@@ -254,7 +257,7 @@ class Well : Operator {
 
 extern(C) float fabsf(float f);
 class Tent : Operator {
-  void init() super.init 1;
+  void init() super.init (1, "Tent");
   string toString() { return "Tent $$childs[0]"; }
   void process(Element[] args) {
     auto copy = allocElements();
@@ -276,7 +279,7 @@ extern(C) void fast_sine_step(float phase, float freq, int count, Element* res, 
 class Sin : Operator {
   float phase, freq;
   void init() {
-    super.init 1;
+    super.init (1, "Sin");
     phase = randf() * PI;
     freq = randf() * 5 + 1;
   }
@@ -305,7 +308,7 @@ class Sin : Operator {
 class Level : Operator {
   float threshold;
   void init() {
-    super.init 3;
+    super.init (3, "Level");
     threshold = 1 - randf() * 2;
   }
   string toString() { return "Level($$childs[0], $$childs[1], $$childs[2])"; }
@@ -335,7 +338,7 @@ class Level : Operator {
 
 class Mix : Operator {
   void init() {
-    super.init 3;
+    super.init (3, "Mix");
   }
   string toString() { return "Mix($$childs[0], $$childs[1], $$childs[2])"; }
   void process(Element[] args) {
@@ -436,21 +439,23 @@ void calcLine(int yfrom, yto, width, height, int aa, Operator tree, gdImagePtr g
   i = 0;
   for (int y, int x) <- cross(yfrom..yto, 0..width) {
     vec3f sum = vec3f(0);
-    for (int y2, int x2) <- cross(0..aa, 0..aa) {
-      sum += initial[i].col;
-      i++;
-    }
-    sum /= vec3f(aa*aa);
-    auto col = sum * vec3f(0.5) + vec3f(0.5);
     float bound(float low, high, v) {
       if (v < low) return low;
       if (v > high) return high;
       return v;
     }
+    for (int y2, int x2) <- cross(0..aa, 0..aa) {
+      vec3f res = initial[i].col;
+      // bound before AA!
+      res.x = bound(-1, 1, res.x);
+      res.y = bound(-1, 1, res.y);
+      res.z = bound(-1, 1, res.z);
+      sum += res;
+      i++;
+    }
+    sum /= vec3f(aa*aa);
+    auto col = sum * vec3f(0.5) + vec3f(0.5);
     // col.x = bound(0, 1, fmodf(col.x + offs, 1));
-    col.x = bound(0, 1, col.x);
-    col.y = bound(0, 1, col.y);
-    col.z = bound(0, 1, col.z);
     // col = hsv2rgb col;
     gdp.tpixels[y][width - 1 - x] = floatToIntColor col;
   }

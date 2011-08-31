@@ -2,41 +2,226 @@ module prettygen;
 
 import prettyops;
 
-import std.time, std.string, std.thread, gd;
+import std.string;
+import c.stdlib, c.poll, c.unistd;
+string readback(string cmd, string data) {
+  int x 2 hdl_sysward, hdl_selfward;
+  pipe hdl_sysward; // self -> system()
+  pipe hdl_selfward; // system() -> self
+  "exec $(hdl_sysward[1])>&-; exec $(hdl_selfward[0])>&-; <&$(hdl_sysward[0]) $cmd >&$(hdl_selfward[1]) &"
+    .toStringz().system();
+  close hdl_sysward[0]; // read side
+  close hdl_selfward[1]; // write side
+  char[auto~] result;
+  bool running = true;
+  int fdslength = 2;
+  while running {
+    pollfd x 2 fds;
+    fds[0].(fd, events) = (hdl_selfward[0], POLLIN);
+    fds[1].(fd, events) = (hdl_sysward [1], POLLOUT);
+    auto hits = poll(fds.ptr, fdslength, -1);
+    if fds[0].revents & POLLHUP running = false;
+    else {
+      if fds[0].revents & POLLIN {
+        char x 128 buf;
+        auto size = read buf.(hdl_selfward[0], ptr, length);
+        if (size > 0) {
+          result ~= buf[0 .. size];
+        }
+      }
+      if fds[1].revents & POLLOUT {
+        auto res = write data.(hdl_sysward[1], ptr, length);
+        if res < 0 {
+          raise-error new Error "Write error";
+        }
+        data = data[res .. $];
+        if !data.length { close hdl_sysward[1]; fdslength = 1; }
+      }
+    }
+  }
+  return result[];
+}
+
+import std.time, std.string, std.thread, std.file, gd;
 extern(C) char* getenv(char*);
 extern(C) FILE* stdout;
 void main() {
+  set-handler(Error err) {
+    writeln "Content-type: text/html";
+    writeln "";
+    writeln "<html><head><title>Error!</title></head><body><h2>An error has occurred! </h2><h3>$err</h3></body></html>";
+    invoke-exit "main-return";
+  }
+  define-exit "main-return" {
+    return;
+  }
   initOps();
   string queryString = CToString getenv toStringz "QUERY_STRING";
+  Operator tree;
+  int aa = 1, seed;
+  (int, int) size = (512, 512);
+  (int, int) depth;
+  string treepath;
+  void parseParams(string params) {
+    void initTree() {
+      if (tree) return;
+      initRNG seed;
+      depth[0] = 2 + rand() % 4;
+      depth[1] = depth[0] + rand() % 4;
+      tree = genTree(depth);
+    }
+    auto parts = params.split "&";
+    for auto part <- parts {
+      if (auto rest = part.startsWith "seed=") seed = rest.atoi();
+      else if (auto rest = part.startsWith "size=") {
+        if (rest.find("x") != -1) {
+          size = (rest.split("x")[0].atoi(), rest.split("x")[1].atoi());
+        } else {
+          size = (rest.atoi() x 2);
+        }
+      }
+      else if (auto rest = part.startsWith "hq") aa = 6;
+      else if (auto rest = part.startsWith "aa=") aa = rest.atoi();
+      else if (auto rest = part.startsWith "treepath=") {
+        if (!seed) raise-error new Error "Must define seed before treepath! ";
+        initTree();
+        (treepath, params) = rest.slice "&";
+        string tp = treepath;
+        while (tp.length) {
+          (string step, tp) = tp.slice "-";
+          tree = tree.childs[step.atoi()];
+        }
+      } else raise-error new Error "Unknown URL parameter: $part";
+    }
+    initTree();
+  }
+  string tree_graph() {
+    int count;
+    (string, string) recurse(Operator op, string treepath = "") {
+      string nodename = "node_$(count++)";
+      string res = "$nodename [label=\"$(op.name)\", fillcolor=\"#ffffff40\", style=filled]; \n";
+      for (int i, Operator ch) <- zip(0..-1, op.childs) {
+        auto chtup = recurse(ch, "$treepath$i-");
+        res ~= chtup[0];
+        res ~= "$nodename -> $(chtup[1]); \n";
+      }
+      return (res, nodename);
+    }
+    string res = recurse tree #[0];
+    return "Digraph G { bgcolor = transparent; rankdir = LR; $res }";
+    
+  }
+  if (auto rest = queryString.startsWith "basegraph") {
+    writeln "Content-type: image/png";
+    writeln "";
+    fflush(stdout);
+    
+    seed = delegate int() { long l = µsec(); return *int* :&l; }();
+    if (rest.startsWith "&") rest = rest[1..$];
+    
+    parseParams rest;
+    
+    auto pngdata = readback("dot -Tpng ", tree_graph());
+    using new writer {
+      hdl = 1;
+      step byte[]:pngdata;
+      close;
+    }
+    return;
+  }
+  if (auto rest = queryString.startsWith "picture") {
+    writeln "Content-type: text/html";
+    writeln "";
+    
+    seed = delegate int() { long l = µsec(); return *int* :&l; }();
+    if (rest.startsWith "&") rest = rest[1..$];
+    
+    parseParams rest;
+    
+    writeln "<html>
+    <head>
+    <title>Image with seed $seed</title>
+    </head>
+    <body>
+    Seed: $seed<br>
+    <a href=\"?derivation&$rest\">Derivation</a>
+    <img style=\"margin: 5px; border: solid 1px; \" src=\"?img$rest\" /><br>
+    </body>
+    </html>";
+    return;
+  }
+  string tree_info(string rest) {
+    auto positions = readback("dot -Tdot", tree_graph()).split("\n");
+    (int, int) graphsize;
+    {
+      auto szstr = positions[3].between("bb=\"", "\"").split(",");
+      graphsize[0] = szstr[2].atoi();
+      graphsize[1] = szstr[3].atoi();
+    }
+    (int, int) lookupNodePosition(string nodename) {
+      for auto line <- positions {
+        line = line.strip();
+        if (line.startsWith nodename) {
+          auto pos-str = line.between("pos=\"", "\"");
+          (string a, string b) = pos-str.slice ",";
+          return (a.atoi(), b.atoi());
+        }
+      }
+      raise-error new Error "Internal error: no such node: $nodename";
+    }
+    char[auto~] extra_info;
+    int count;
+    string recurse(Operator op, string treepath) {
+      string nodename = "node_$(count++)";
+      auto pos = lookupNodePosition nodename;
+      extra_info ~= "
+        <a href=\"?picture&seed=$seed&size=512&treepath=$treepath\">
+        <img src=\"?img&seed=$seed&size=64&treepath=$treepath\" style=\"position: absolute; left: $(pos[0] - 20)pt; top: $(graphsize[1] - pos[1] - 20)pt; \" />
+        </a>";
+      for (int i, Operator ch) <- zip(0..-1, op.childs) {
+        string chname = recurse(ch, "$treepath$i-");
+      }
+      return nodename;
+    }
+    recurse (tree, treepath);
+    string res = "
+    <div style=\"position: relative; width: $(graphsize[0])pt; height: $(graphsize[1])pt; \">
+    $(extra_info[])
+    <img src=\"?basegraph&$rest\" style=\"position: absolute; z-index: 1; border: 1px solid; pointer-events: none; \"/>
+    </div>";
+    return res;
+  }
+  if (auto rest = queryString.startsWith "derivation") {
+    writeln "Content-type: text/html";
+    writeln "";
+    
+    seed = delegate int() { long l = µsec(); return *int* :&l; }();
+    if (rest.startsWith "&") rest = rest[1..$];
+    
+    parseParams rest;
+    
+    writeln "<html>
+    <head>
+    <title>Derivation of seed $seed</title>
+    </head>
+    <body>
+    <a href=\"?picture&$rest\">Back</a><br>
+    $(tree_info(rest))
+    <br>
+    <img style=\"margin: 5px; border: solid 1px; \" src=\"?img$rest\" /><br>
+    </body>
+    </html>";
+    return;
+  }
   if (auto rest = queryString.startsWith "img") {
     writeln "Content-type: image/png";
     writeln "";
     
-    int seed = delegate int() { long l = µsec(); return *int* :&l; }();
+    seed = delegate int() { long l = µsec(); return *int* :&l; }();
     if (rest.startsWith "&") rest = rest[1..$];
     
-    int aa = 1;
-    if (auto rest2 = rest.startsWith "seed=") { seed = rest2.atoi(); rest = rest2.between("&", ""); }
-    auto size = (512, 512);
-    if (auto rest2 = rest.startsWith "size=") {
-      (string sz, rest) = rest2.slice "&";
-      if (sz.find("x") != -1) {
-        size = (sz.split("x")[0].atoi(), sz.split("x")[1].atoi());
-      } else {
-        size = (sz.atoi() x 2);
-      }
-    }
-    if (auto rest2 = rest.startsWith "hq") { aa = 6; rest = rest2.between("&", ""); }
-    if (auto rest2 = rest.startsWith "aa=") { aa = rest2.atoi(); rest = rest2.between("&", ""); }
-    initRNG seed;
-    (int, int) depth;
-    depth[0] = 2 + rand() % 4;
-    depth[1] = depth[0] + rand() % 4;
-    /*if (auto rest2 = rest.startsWith "depth=") {
-      (string dep, rest) = rest2.slice "&";
-      depth = (dep.split("-")[0].atoi(), dep.split("-")[1].atoi());
-    }*/
-    auto tree = genTree(depth);
+    parseParams rest;
+    
     float offs = randf();
     auto gdp = gdImageCreateTrueColor(size);
     onSuccess gdImageDestroy gdp;
@@ -64,8 +249,8 @@ void main() {
     long l = µsec();
     initRNG *int*: &l;
     for (int i = 0; i < count; ++i) {
-      auto seed = rand();
-      res ~= "<div class=\"gallery_pic\"><a href=\"?img&seed=$seed&size=1024\"><img src=\"?img&seed=$seed&size=128\" /></a><br></div>";
+      auto newseed = rand();
+      res ~= "<div class=\"gallery_pic\"><a href=\"?picture&seed=$newseed&size=1024\"><img src=\"?img&seed=$newseed&size=128\" /></a><br></div>";
     }
     return res[];
   }

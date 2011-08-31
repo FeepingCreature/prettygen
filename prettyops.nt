@@ -113,6 +113,36 @@ class SinCos : Operator {
   }
 }
 
+class SuperSin : Operator {
+  float x 3 phase, freq;
+  void init() {
+    super.init (1, "SuperSin");
+    for int i <- 0..3 {
+      phase[i] = randf() * PI;
+      freq[i] = randf() * 5 + 1;
+    }
+  }
+  string toString() { return "SuperSin $$childs[0]"; }
+  void process(Element[] args) {
+    auto copy = allocElements();
+    
+    copy[] = args[];
+    
+    childs[0].process copy;
+    
+    for int i <- 0..args.length {
+      auto p2 = &copy[i].col;
+      args[i].col = vec3f(
+        sin (phase[0] + freq[0] * p2.x),
+        sin (phase[1] + freq[1] * p2.y),
+        sin (phase[2] + freq[2] * p2.z)
+      );
+    }
+    
+    freeElements copy;
+  }
+}
+
 class ColMatrix : Operator {
   float x 9 parts;
   void init() {
@@ -256,6 +286,9 @@ class Well : Operator {
 }
 
 extern(C) float fabsf(float f);
+extern(C) void fast_sine_step(float phase, float freq, int count, Element* res, Element* op2);
+extern(C) void fast_tent_step(int count, Element* res, Element* op2);
+
 class Tent : Operator {
   void init() super.init (1, "Tent");
   string toString() { return "Tent $$childs[0]"; }
@@ -266,15 +299,14 @@ class Tent : Operator {
     
     childs[0].process copy;
     
-    for int i <- 0..args.length
+    fast_tent_step(args.length, args.ptr, copy.ptr);
+    /*for int i <- 0..args.length
       for int id <- 0..3
-        args[i].col[id] = 1 - 2 * fabsf copy[i].col[id];
+        args[i].col[id] = 1 - 2 * fabsf copy[i].col[id];*/
     
     freeElements copy;
   }
 }
-
-extern(C) void fast_sine_step(float phase, float freq, int count, Element* res, Element* op2);
 
 class Sin : Operator {
   float phase, freq;
@@ -291,15 +323,15 @@ class Sin : Operator {
     
     childs[0].process copy;
     
-    // fast_sine_step(phase, freq, args.length, args.ptr, copy.ptr);
-    for int i <- 0..args.length {
+    fast_sine_step(phase, freq, args.length, args.ptr, copy.ptr);
+    /*for int i <- 0..args.length {
       auto p2 = &copy[i].col;
       args[i].col = vec3f(
         sin (phase + freq * p2.x),
         sin (phase + freq * p2.y),
         sin (phase + freq * p2.z)
       );
-    }
+    }*/
     
     freeElements copy;
   }
@@ -370,6 +402,7 @@ void initOps() {
   arity0-ops ~= delegate Operator() { return new Matrix; };
   arity0-ops ~= delegate Operator() { return new Constant; };
   arity0-ops ~= delegate Operator() { return new SinCos; };
+  ops ~= delegate Operator() { return new SuperSin; };
   ops ~= delegate Operator() { return new ColMatrix; };
   ops ~= delegate Operator() { return new PosMatrix; };
   ops ~= delegate Operator() { return new ComplexSquare; };
@@ -421,6 +454,14 @@ vec3f hsv2rgb(vec3f hsv) {
   else return vec3f(v, p, q);
 }
 
+vec3f gamma2linear(vec3f v) {
+  return vec3f(pow(v.x, 2.2), pow(v.y, 2.2), pow(v.z, 2.2));
+}
+
+vec3f linear2gamma(vec3f v) {
+  return vec3f(pow(v.x, 1/2.2), pow(v.y, 1/2.2), pow(v.z, 1/2.2));
+}
+
 import gd, sdl;
 void calcLine(int yfrom, yto, width, height, int aa, Operator tree, gdImagePtr gdp, float offs) {
   streamsize = width * (yto - yfrom) * aa * aa;
@@ -445,16 +486,16 @@ void calcLine(int yfrom, yto, width, height, int aa, Operator tree, gdImagePtr g
       return v;
     }
     for (int y2, int x2) <- cross(0..aa, 0..aa) {
-      vec3f res = initial[i].col;
+      vec3f res = initial[i].col * vec3f(0.5) + vec3f(0.5);
       // bound before AA!
-      res.x = bound(-1, 1, res.x);
-      res.y = bound(-1, 1, res.y);
-      res.z = bound(-1, 1, res.z);
-      sum += res;
+      res.x = bound(0, 1, res.x);
+      res.y = bound(0, 1, res.y);
+      res.z = bound(0, 1, res.z);
+      sum += gamma2linear res; // blend in correct space
       i++;
     }
     sum /= vec3f(aa*aa);
-    auto col = sum * vec3f(0.5) + vec3f(0.5);
+    auto col = linear2gamma sum;
     // col.x = bound(0, 1, fmodf(col.x + offs, 1));
     // col = hsv2rgb col;
     gdp.tpixels[y][width - 1 - x] = floatToIntColor col;

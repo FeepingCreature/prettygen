@@ -63,12 +63,23 @@ void main() {
   (int, int) depth;
   string treepath;
   void parseParams(string params) {
+    int treeCost() {
+      int recurse(Operator tree) {
+        int res = 1;
+        for auto ch <- tree.childs
+          res += recurse ch;
+        return res;
+      }
+      return recurse tree;
+    }
     void initTree() {
       if (tree) return;
       initRNG seed;
-      depth[0] = 2 + rand() % 4;
-      depth[1] = depth[0] + rand() % 4;
-      tree = genTree(depth);
+      do {
+        depth[0] = 2 + rand() % 4;
+        depth[1] = depth[0] + rand() % 9;
+        tree = genTree(depth);
+      } while (treeCost() > 256) { } // reject trees that are too expensive
     }
     auto parts = params.split "&";
     for auto part <- parts {
@@ -144,7 +155,7 @@ void main() {
     </head>
     <body>
     Seed: $seed<br>
-    <a href=\"?derivation&$rest\">Derivation</a>
+    <a href=\"?derivation&$rest\">Derivation</a><br>
     <img style=\"margin: 5px; border: solid 1px; \" src=\"?img$rest\" /><br>
     </body>
     </html>";
@@ -250,7 +261,7 @@ void main() {
     initRNG *int*: &l;
     for (int i = 0; i < count; ++i) {
       auto newseed = rand();
-      res ~= "<div class=\"gallery_pic\"><a href=\"?picture&seed=$newseed&size=1024\"><img src=\"?img&seed=$newseed&size=128\" /></a><br></div>";
+      res ~= "<div class=\"gallery_pic\"><a href=\"?picture&seed=$newseed&$queryString\"><img src=\"?img&seed=$newseed&size=128\" /></a><br></div>";
     }
     return res[];
   }
@@ -264,7 +275,9 @@ void main() {
   </head>
   <body>
   Image!<br>
+  <div style=\"position: relative; width: $((128+16)*7)px; \">
   $(img_gen())
+  </div>
   </body>
   </html>
   ";

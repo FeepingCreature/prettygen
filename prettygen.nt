@@ -1,0 +1,86 @@
+module prettygen;
+
+import prettyops;
+
+import std.time, std.string, std.thread, gd;
+extern(C) char* getenv(char*);
+extern(C) FILE* stdout;
+void main() {
+  initOps();
+  string queryString = CToString getenv toStringz "QUERY_STRING";
+  if (auto rest = queryString.startsWith "img") {
+    writeln "Content-type: image/png";
+    writeln "";
+    
+    int seed = delegate int() { long l = µsec(); return *int* :&l; }();
+    if (rest.startsWith "&") rest = rest[1..$];
+    
+    int aa = 1;
+    if (auto rest2 = rest.startsWith "seed=") { seed = rest2.atoi(); rest = rest2.between("&", ""); }
+    auto size = (512, 512);
+    if (auto rest2 = rest.startsWith "size=") {
+      (string sz, rest) = rest2.slice "&";
+      if (sz.find("x") != -1) {
+        size = (sz.split("x")[0].atoi(), sz.split("x")[1].atoi());
+      } else {
+        size = (sz.atoi() x 2);
+      }
+    }
+    if (auto rest2 = rest.startsWith "hq") { aa = 6; rest = rest2.between("&", ""); }
+    if (auto rest2 = rest.startsWith "aa=") { aa = rest2.atoi(); rest = rest2.between("&", ""); }
+    initRNG seed;
+    (int, int) depth;
+    depth[0] = 2 + rand() % 4;
+    depth[1] = depth[0] + rand() % 4;
+    /*if (auto rest2 = rest.startsWith "depth=") {
+      (string dep, rest) = rest2.slice "&";
+      depth = (dep.split("-")[0].atoi(), dep.split("-")[1].atoi());
+    }*/
+    auto tree = genTree(depth);
+    float offs = randf();
+    auto gdp = gdImageCreateTrueColor(size);
+    onSuccess gdImageDestroy gdp;
+    auto start = sec();
+    auto lp = new LoopPool 4;
+    alias step = 1;
+    lp.runLoop(size[1] / step, delegate void(int i, thr) {
+      calcLine(i*step, (i+1)*step, size, aa, tree, gdp, offs);
+    });
+    auto stop = sec();
+    // writeln "Time taken: $(float:(stop - start))";
+    // auto hdl = fopen ("pretty.png", "w");
+    // gdImagePng(gdp, c.gd.FILE*: hdl);
+    // fclose hdl;
+    gdImagePng(gdp, c.gd.FILE*:stdout);
+    return;
+  }
+  
+  int count = 64;
+  if (auto rest = queryString.startsWith "count=") { (string c, queryString) = rest.slice "&"; count = c.atoi(); }
+  writeln "Content-type: text/html";
+  writeln "";
+  string img_gen() {
+    char[auto~] res;
+    long l = µsec();
+    initRNG *int*: &l;
+    for (int i = 0; i < count; ++i) {
+      auto seed = rand();
+      res ~= "<div class=\"gallery_pic\"><a href=\"?img&seed=$seed&size=1024\"><img src=\"?img&seed=$seed&size=128\" /></a><br></div>";
+    }
+    return res[];
+  }
+  writeln "
+  <html>
+  <head>
+  <title>Picgen</title>
+  <style type=\"text/css\">
+    .gallery_pic {margin: 4px; float: left; border: 1px solid; }
+  </style>
+  </head>
+  <body>
+  Image!<br>
+  $(img_gen())
+  </body>
+  </html>
+  ";
+}

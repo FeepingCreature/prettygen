@@ -58,6 +58,21 @@ class Distance : Operator {
   }
 }
 
+extern(C) float fabsf(float);
+class ManHattan : Operator {
+  void init() super.init (0, "ManHattan");
+  void process(Element[] args) {
+    for int i <- 0..args.length { auto pos = args[i].pos; args[i].col = vec3f(fabsf pos.x + fabsf pos.y - 1); }
+  }
+}
+
+class Square : Operator {
+  void init() super.init (0, "Square");
+  void process(Element[] args) {
+    for int i <- 0..args.length { auto pos = args[i].pos; pos = vec2f(fabsf pos.x, fabsf pos.y); args[i].col = vec3f(1 - 2 * [pos.x, pos.y][eval pos.y > pos.x]); }
+  }
+}
+
 extern(C) float fmodf(float f, g);
 
 float wrap(float f) {
@@ -459,6 +474,8 @@ void initOps() {
   arity0-ops ~= delegate Operator() { return new Constant; };
   arity0-ops ~= delegate Operator() { return new SinCos; };
   arity0-ops ~= delegate Operator() { return new Angle; };
+  arity0-ops ~= delegate Operator() { return new Square; };
+  arity0-ops ~= delegate Operator() { return new ManHattan; };
   ops ~= delegate Operator() { return new SuperSin; };
   ops ~= delegate Operator() { return new ColMatrix; };
   ops ~= delegate Operator() { return new PosMatrix; };
@@ -564,8 +581,8 @@ void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdIma
       i++;
     }
     sum /= vec3f(aa*aa);
-    auto col = linear2gamma sum;
-    // col.x = bound(0, 1, fmodf(col.x + offs, 1));
+    // auto col = linear2gamma sum;
+    auto col = sum;
     // col = hsv2rgb col;
     gdp.tpixels[y][width - 1 - x] = floatToIntColor col;
     if (++x == width) { x = 0; y++; }

@@ -1,34 +1,39 @@
 module prettyops;
 
-struct Element {
-  vec2f pos;
-  vec3f col;
-  alias toString = "[$col @$pos]";
-}
+vec2f[][auto~] freelist_vec2;
+vec3f[][auto~] freelist_vec3;
+int offs_vec2, offs_vec3;
 
-Element[][auto~] freelist;
-int offs;
 int streamsize;
 
-float delta;
+shared float delta;
 
-Element[] allocElements() {
-  if (freelist.length - offs) {
-    return freelist[offs++];
+vec2f[] allocVec2() {
+  if (freelist_vec2.length - offs_vec2) {
+    return freelist_vec2[offs_vec2++];
   }
-  auto res = new Element[] (streamsize + 1)#.ptr;
-  res = Element*:((int:res + 15) & -16); // align
+  auto res = new vec2f[] (streamsize + 2)#.ptr;
+  res = vec2f*:((int:res + 15) & -16); // align
   return res[0..streamsize];
 }
-void freeElements(Element[] array) {
-  freelist ~= array;
+
+vec3f[] allocVec3() {
+  if (freelist_vec3.length - offs_vec3) {
+    return freelist_vec3[offs_vec3++];
+  }
+  auto res = new vec3f[] (streamsize + 1)#.ptr;
+  res = vec3f*:((int:res + 15) & -16); // align
+  return res[0..streamsize];
 }
+
+void freeList(vec2f[] array) { freelist_vec2 ~= array; }
+void freeList(vec3f[] array) { freelist_vec3 ~= array; }
 
 class Operator {
   Operator[] childs;
   string name;
   void init(int arity, string name) { if arity childs = new Operator[] arity; this.name = name; }
-  void process(Element[] args) { raise-error new Error "Unimplemented: Operator::process"; }
+  void process(vec2f[] pos, vec3f[] col) { raise-error new Error "Unimplemented: Operator::process"; }
 }
 
 import std.random, std.math;
@@ -37,41 +42,22 @@ int rand() { return rng.rand(); }
 float randf() { return std.random.base.randf(rng); }
 void initRNG(int seed) { rng = getPRNG seed; }
 
-class Variable-X : Operator {
-  void init() super.init (0, "Variable-X");
-  void process(Element[] args) {
-    for int i <- 0..args.length { args[i].col = (*vec3f* :&args[i].pos).xxx; }
-  }
-}
-
-class Variable-Y : Operator {
-  void init() super.init (0, "Variable-Y");
-  void process(Element[] args) {
-    for int i <- 0..args.length { args[i].col = (*vec3f* :&args[i].pos).yyy; }
-  }
-}
-
-class Distance : Operator {
-  void init() super.init (0, "Distance");
-  void process(Element[] args) {
-    for int i <- 0..args.length { auto pos = args[i].pos; args[i].col = vec3f((pos*pos).(x+y) - 1); }
-  }
-}
-
 extern(C) float fabsf(float);
-class ManHattan : Operator {
-  void init() super.init (0, "ManHattan");
-  void process(Element[] args) {
-    for int i <- 0..args.length { auto pos = args[i].pos; args[i].col = vec3f(fabsf pos.x + fabsf pos.y - 1); }
-  }
-}
 
-class Square : Operator {
-  void init() super.init (0, "Square");
-  void process(Element[] args) {
-    for int i <- 0..args.length { auto pos = args[i].pos; pos = vec2f(fabsf pos.x, fabsf pos.y); args[i].col = vec3f(1 - 2 * [pos.x, pos.y][eval pos.y > pos.x]); }
+template NullArity(alias A) <<EOT
+  class NullArity : Operator {
+    void init() super.init (0, A[0]);
+    void process(vec2f[] poslist, vec3f[] col) {
+      for int i <- 0..poslist.length { auto pos = poslist[i]; col[i] = mixin(A[1]); }
+    }
   }
-}
+EOT
+
+alias Variable-X = NullArity!("Variable-X", "(*vec3f*: &pos).xxx");
+alias Variable-Y = NullArity!("Variable-Y", "(*vec3f*: &pos).yyy");
+alias Distance = NullArity!("Distance", "vec3f(pos * pos #.(x+y) - 1)");
+alias ManHattan = NullArity!("ManHattan", "vec3f(pos.(fabsf x + fabsf y - 1))");
+alias Square = NullArity!("Square", "vec3f(pos.(vec2f(fabsf x, fabsf y)).(1 - 2 * [x, y][eval y > x]))");
 
 extern(C) float fmodf(float f, g);
 
@@ -86,8 +72,8 @@ class Angle : Operator {
     super.init (0, "Angle");
     factor = rand() % 8 + 1;
   }
-  void process(Element[] args) {
-    for int i <- 0..args.length { auto pos = args[i].pos; args[i].col = vec3f(wrap(factor * atan2(pos.y, pos.x) / PI + delta * 2)); }
+  void process(vec2f[] poslist, vec3f[] col) {
+    for int i <- 0..poslist.length { auto pos = poslist[i]; col[i] = vec3f(wrap(factor * atan2(pos.y, pos.x) / PI + delta * 2)); }
   }
 }
 
@@ -100,10 +86,10 @@ class Matrix : Operator {
     for int i <- 0..6
       parts[i] = randrange - randf() * randrange * 2;
   }
-  void process(Element[] args) {
-    for int i <- 0..args.length {
-      auto pos = args[i].pos;
-      args[i].col = vec3f(
+  void process(vec2f[] poslist, vec3f[] col) {
+    for int i <- 0..poslist.length {
+      auto pos = poslist[i];
+      col[i] = vec3f(
         parts[0] * pos.x + parts[1] * pos.y,
         parts[2] * pos.x + parts[3] * pos.y,
         parts[4] * pos.x + parts[5] * pos.y
@@ -123,25 +109,20 @@ class PosMatrix : Operator {
     parts[4] = randrange - randf() * randrange * 2;
     parts[5] = 0.5 - randf();
   }
-  void process(Element[] args) {
-    auto copy = allocElements();
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto copy = allocVec2();
     
-    for int i <- 0..args.length {
-      auto ap = args[i].pos;
-      copy[i].pos = vec2f(
-        parts[0] * ap.x + parts[1] * ap.y + parts[2],
-        parts[3] * ap.x + parts[4] * ap.y + parts[5]
+    for int i <- 0..poslist.length {
+      auto pos = poslist[i];
+      copy[i] = vec2f(
+        parts[0] * pos.x + parts[1] * pos.y + parts[2],
+        parts[3] * pos.x + parts[4] * pos.y + parts[5]
       );
     }
     
-    childs[0].process copy;
+    childs[0].process (copy, col);
     
-    for int i <- 0..args.length {
-      auto cc = copy[i].col;
-      args[i].col = cc;
-    }
-    
-    freeElements copy;
+    freeList copy;
   }
 }
 
@@ -149,18 +130,16 @@ class SinCos : Operator {
   void init() {
     super.init (0, "SinCos");
   }
-  void process(Element[] args) {
-    for int i <- 0..args.length {
-      auto pos = args[i].pos;
-      args[i].col = vec3f(sin (pos.x + delta * PI2), cos (pos.y + delta * PI2), 0);
+  void process(vec2f[] poslist, vec3f[] col) {
+    for int i <- 0..poslist.length {
+      auto pos = poslist[i];
+      col[i] = vec3f(sin (pos.x + delta * PI2), cos (pos.y + delta * PI2), 0);
     }
   }
 }
 
 extern(C) void fast_memcpy(void* to, from, int length);
 extern(C) void fast_pow_vec(vec4f* v1, vec4f* v2, vec4f* res);
-
-extern(C) void fast_supersin(float *phases, float *freqs, int count, Element* res, Element* op2);
 
 class SuperSin : Operator {
   float x 3 phase, freq;
@@ -172,25 +151,16 @@ class SuperSin : Operator {
     }
   }
   string toString() { return "SuperSin $$childs[0]"; }
-  void process(Element[] args) {
-    auto copy = allocElements();
+  void process(vec2f[] poslist, vec3f[] col) {
+    childs[0].process (poslist, col);
     
-    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
-    
-    childs[0].process copy;
-    
-    fast_supersin(phase.ptr, freq.ptr, args.length, args.ptr, copy.ptr);
-    /*
-    for int i <- 0..args.length {
-      auto p2 = &copy[i].col;
-      args[i].col = vec3f(
-        sin (phase[0] + freq[0] * p2.x),
-        sin (phase[1] + freq[1] * p2.y),
-        sin (phase[2] + freq[2] * p2.z)
+    for int i <- 0..poslist.length {
+      col[i] = vec3f(
+        sin (phase[0] + freq[0] * col[i].x),
+        sin (phase[1] + freq[1] * col[i].y),
+        sin (phase[2] + freq[2] * col[i].z)
       );
     }
-    */
-    freeElements copy;
   }
 }
 
@@ -201,22 +171,16 @@ class ColMatrix : Operator {
     for int i <- 0..9
       parts[i] = randrange - randf() * randrange * 2;
   }
-  void process(Element[] args) {
-    auto copy = allocElements();
-    
-    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
-    childs[0].process copy;
-    
-    for int i <- 0..args.length {
-      auto col = copy[i].col;
-      args[i].col = vec3f(
-        parts[0] * col.x + parts[1] * col.y + parts[2] * col.z,
-        parts[3] * col.x + parts[4] * col.y + parts[5] * col.z,
-        parts[6] * col.x + parts[7] * col.y + parts[8] * col.z
+  void process(vec2f[] poslist, vec3f[] col) {
+    childs[0].process (poslist, col);
+    for int i <- 0..poslist.length {
+      auto c = col[i];
+      col[i] = vec3f(
+        parts[0] * c.x + parts[1] * c.y + parts[2] * c.z,
+        parts[3] * c.x + parts[4] * c.y + parts[5] * c.z,
+        parts[6] * c.x + parts[7] * c.y + parts[8] * c.z
       );
     }
-    
-    freeElements copy;
   }
 }
 
@@ -224,22 +188,17 @@ class ComplexSquare : Operator {
   void init() {
     super.init (1, "ComplexSquare");
   }
-  void process(Element[] args) {
-    auto copy = allocElements();
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto copy = allocVec2();
     
-    for int i <- 0..args.length {
-      auto ap = args[i].pos;
-      copy[i].pos = vec2f(ap.x * ap.x - ap.y * ap.y, 2 * ap.x * ap.y);
+    for int i <- 0..poslist.length {
+      auto pos = poslist[i];
+      copy[i] = vec2f(pos.x * pos.x - pos.y * pos.y, 2 * pos.x * pos.y);
     }
     
-    childs[0].process copy;
+    childs[0].process (copy, col);
     
-    for int i <- 0..args.length {
-      auto cc = copy[i].col;
-      args[i].col = cc;
-    }
-    
-    freeElements copy;
+    freeList copy;
   }
 }
 
@@ -251,46 +210,40 @@ class Constant : Operator {
   }
   // string toString() return "Constant $value";
   string toString() return "Constant";
-  void process(Element[] args) {
-    for int i <- 0..args.length args[i].col = value;
+  void process(vec2f[] poslist, vec3f[] col) {
+    for int i <- 0..col.length col[i] = value;
   }
 }
 
 class Sum : Operator {
   void init() super.init (2, "Sum");
   string toString() { return "Sum($$childs[0], $$childs[1])"; }
-  void process(Element[] args) {
-    auto copy1 = allocElements(), copy2 = allocElements();
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto col2 = allocVec3();
     
-    fast_memcpy(copy1.ptr, args.ptr, args.length * size-of Element);
-    fast_memcpy(copy2.ptr, args.ptr, args.length * size-of Element);
+    childs[0].process (poslist, col);
+    childs[1].process (poslist, col2);
     
-    childs[0].process copy1;
-    childs[1].process copy2;
+    for int i <- 0..col.length
+      col[i] = col[i] + col2[i] #*0.5;
     
-    for int i <- 0..args.length
-      args[i].col = copy1[i].col + copy2[i].col #*0.5;
-    
-    freeElements copy1; freeElements copy2;
+    freeList col2;
   }
 }
 
 class Product : Operator {
   void init() super.init (2, "Product");
   string toString() { return "Product($$childs[0], $$childs[1])"; }
-  void process(Element[] args) {
-    auto copy1 = allocElements(), copy2 = allocElements();
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto col2 = allocVec3();
     
-    fast_memcpy(copy1.ptr, args.ptr, args.length * size-of Element);
-    fast_memcpy(copy2.ptr, args.ptr, args.length * size-of Element);
+    childs[0].process (poslist, col);
+    childs[1].process (poslist, col2);
     
-    childs[0].process copy1;
-    childs[1].process copy2;
+    for int i <- 0..col.length
+      col[i] = col[i] * col2[i];
     
-    for int i <- 0..args.length
-      args[i].col = copy1[i].col * copy2[i].col;
-    
-    freeElements copy1; freeElements copy2;
+    freeList col2;
   }
 }
 
@@ -302,67 +255,49 @@ float mymodf(float a, b) {
 class Mod : Operator {
   void init() super.init (2, "Mod");
   string toString() { return "Mod($$childs[0], $$childs[1])"; }
-  void process(Element[] args) {
-    auto copy = allocElements();
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto col2 = allocVec3();
     
-    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
+    childs[0].process (poslist, col);
+    childs[1].process (poslist, col2);
     
-    childs[0].process args;
-    childs[1].process copy;
+    for int i <- 0..col.length
+      col[i] = vec3f(mymodf(col[i].x, col2[i].x), mymodf(col[i].y, col2[i].y), mymodf(col[i].z, col2[i].z));
     
-    for int i <- 0..args.length
-      args[i].col = vec3f(mymodf(args[i].col.x, copy[i].col.x), mymodf(args[i].col.y, copy[i].col.y), mymodf(args[i].col.z, copy[i].col.z));
-    
-    freeElements copy;
+    freeList col2;
   }
 }
 
 class Well : Operator {
   void init() super.init (1, "Well");
   string toString() { return "Well $$childs[0]"; }
-  void process(Element[] args) {
-    auto copy = allocElements();
+  void process(vec2f[] poslist, vec3f[] col) {
+    childs[0].process (poslist, col);
     
-    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
-    
-    childs[0].process copy;
-    
-    for int i <- 0..args.length {
-      xmm[4] = copy[i].col;
+    for int i <- 0..poslist.length {
+      xmm[4] = col[i];
       xmm[4] = xmm[4] * xmm[4] + vec4f(1);
       xmm[4] *= xmm[4];
       xmm[4] *= xmm[4];
       xmm[4] *= xmm[4];
       
-      args[i].col = vec3f(1) - vec3f(2) / vec3f:xmm[4];
+      col[i] = vec3f(1) - vec3f(2) / vec3f:xmm[4];
     }
-    freeElements copy;
   }
 }
-
-extern(C) float fabsf(float f);
-extern(C) void fast_sine_step(float phase, float freq, int count, Element* res, Element* op2);
-extern(C) void fast_tent_step(int count, Element* res, Element* op2);
 
 class Tent : Operator {
   void init() super.init (1, "Tent");
   string toString() { return "Tent $$childs[0]"; }
-  void process(Element[] args) {
-    auto copy = allocElements();
+  void process(vec2f[] poslist, vec3f[] col) {
+    childs[0].process (poslist, col);
     
-    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
-    
-    childs[0].process copy;
-    
-    fast_tent_step(args.length, args.ptr, copy.ptr);
-    /*for int i <- 0..args.length
-      for int id <- 0..3
-        args[i].col[id] = 1 - 2 * fabsf copy[i].col[id];*/
-    
-    freeElements copy;
+    for int i <- 0..poslist.length
+      col[i] = vec3f(1) - vec3f(2) * vec3f(fabsf col[i].x, fabsf col[i].y, fabsf col[i].z);
   }
 }
 
+extern(C) void fast_sin(float phase, float freq, int count, vec3f* col);
 class Sin : Operator {
   float phase, freq;
   void init() {
@@ -371,24 +306,20 @@ class Sin : Operator {
     freq = randf() * 5 + 1;
   }
   string toString() { return "Sin $$childs[0]"; }
-  void process(Element[] args) {
-    auto copy = allocElements();
+  void process(vec2f[] poslist, vec3f[] col) {
+    childs[0].process (poslist, col);
     
-    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
-    
-    childs[0].process copy;
-    
-    fast_sine_step(phase, freq, args.length, args.ptr, copy.ptr);
-    /*for int i <- 0..args.length {
-      auto p2 = &copy[i].col;
-      args[i].col = vec3f(
-        sin (phase + freq * p2.x),
-        sin (phase + freq * p2.y),
-        sin (phase + freq * p2.z)
+    fast_sin(phase, freq, poslist.length, col.ptr);
+    /*
+    for int i <- 0..poslist.length {
+      auto c = col[i];
+      col[i] = vec3f(
+        sin (phase + freq * c.x),
+        sin (phase + freq * c.y),
+        sin (phase + freq * c.z)
       );
-    }*/
-    
-    freeElements copy;
+    }
+    */
   }
 }
 
@@ -399,34 +330,25 @@ class Level : Operator {
     threshold = 1 - randf() * 2;
   }
   string toString() { return "Level($$childs[0], $$childs[1], $$childs[2])"; }
-  void process(Element[] args) {
-    Element[] copy0, copy1, copy2;
-    copy0 = allocElements();
-    fast_memcpy(copy0.ptr, args.ptr, args.length * size-of Element);
-    childs[0].process copy0;
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto col2 = allocVec3(), col3 = allocVec3();
+    childs[0].process (poslist, col);
+    childs[1].process (poslist, col2);
+    childs[2].process (poslist, col3);
     
-    copy1 = allocElements();
-    fast_memcpy(copy1.ptr, args.ptr, args.length * size-of Element);
-    childs[1].process copy1;
-    
-    copy2 = allocElements();
-    fast_memcpy(copy2.ptr, args.ptr, args.length * size-of Element);
-    childs[2].process copy2;
-    
-    for int k <- 0..args.length {
-      auto c0 = &copy0[k].col;
-      auto c1 = &copy1[k].col;
-      auto c2 = &copy2[k].col;
-      args[k].col = vec3f(
+    for int k <- 0..poslist.length {
+      auto c0 = &col[k];
+      auto c1 = &col2[k];
+      auto c2 = &col3[k];
+      *c0 = vec3f(
         [c1.x, c2.x][eval c0.x >= threshold],
         [c1.y, c2.y][eval c0.y >= threshold],
         [c1.z, c2.z][eval c0.z >= threshold]
       );
     }
     
-    freeElements copy0;
-    freeElements copy1;
-    freeElements copy2;
+    freeList col2;
+    freeList col3;
   }
 }
 
@@ -435,32 +357,24 @@ class Mix : Operator {
     super.init (3, "Mix");
   }
   string toString() { return "Mix($$childs[0], $$childs[1], $$childs[2])"; }
-  void process(Element[] args) {
-    Element[] copy0, copy1, copy2;
-    copy0 = allocElements();
-    fast_memcpy(copy0.ptr, args.ptr, args.length * size-of Element);
-    childs[0].process copy0;
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto col2 = allocVec3(), col3 = allocVec3();
+    childs[0].process (poslist, col);
+    childs[1].process (poslist, col2);
+    childs[2].process (poslist, col3);
     
-    copy1 = allocElements();
-    fast_memcpy(copy1.ptr, args.ptr, args.length * size-of Element);
-    childs[1].process copy1;
-    
-    copy2 = allocElements();
-    fast_memcpy(copy2.ptr, args.ptr, args.length * size-of Element);
-    childs[2].process copy2;
-    
-    for int k <- 0..args.length {
-      xmm[4] = copy0[k].col;
+    for int k <- 0..poslist.length {
+      xmm[4] = col[k];
       xmm[4] = vec3f(1) + xmm[4].xxx #*vec3f(0.5);
       xmm[5] = vec3f(1) - vec3f:xmm[4];
-      xmm[4] = vec3f:xmm[4] * copy1[k].col;
-      xmm[5] = vec3f:xmm[5] * copy2[k].col;
+      xmm[4] = vec3f:xmm[4] * col2[k];
+      xmm[5] = vec3f:xmm[5] * col3[k];
       xmm[4] += xmm[5];
-      args[k].col = xmm[4];
+      col[k] = xmm[4];
     }
-    freeElements copy0;
-    freeElements copy1;
-    freeElements copy2;
+    
+    freeList col2;
+    freeList col3;
   }
 }
 
@@ -546,9 +460,9 @@ vec3f linear2gamma(vec3f v) {
 }
 
 import gd, sdl;
-void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdImagePtr gdp, float offs) {
+void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdImagePtr gdp, bool hsv, float offs) {
   streamsize = distance;
-  auto initial = allocElements();
+  auto initialPos = allocVec2();
   auto backup = (x, y);
   int i;
   float halfw = width / 2f;
@@ -556,12 +470,13 @@ void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdIma
     for (int y2, int x2) <- cross(0..aa, 0..aa) {
       float fx2 = x2 * 1f / aa, fy2 = y2 * 1f / aa;
       float fx = x + fx2, fy = y + fy2;
-      initial[i].pos = vec2f(fx/halfw - 1f, (fy + (width - height) / 2)/halfw - 1f);
+      initialPos[i] = vec2f(fx/halfw - 1f, (fy + (width - height) / 2)/halfw - 1f);
       i++;
     }
     if (++x == width) { x = 0; y++; }
   }
-  tree.process initial;
+  auto colResult = allocVec3();
+  tree.process (initialPos, colResult);
   (x, y) = backup;
   i = 0;
   while (i < distance) {
@@ -572,7 +487,7 @@ void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdIma
       return v;
     }
     for (int y2, int x2) <- cross(0..aa, 0..aa) {
-      vec3f res = initial[i].col * vec3f(0.5) + vec3f(0.5);
+      vec3f res = colResult[i] * vec3f(0.5) + vec3f(0.5);
       // bound before AA!
       res.x = bound(0, 1, res.x);
       res.y = bound(0, 1, res.y);
@@ -583,9 +498,11 @@ void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdIma
     sum /= vec3f(aa*aa);
     // auto col = linear2gamma sum;
     auto col = sum;
-    // col = hsv2rgb col;
+    if (hsv) col = hsv2rgb col;
     gdp.tpixels[y][width - 1 - x] = floatToIntColor col;
     if (++x == width) { x = 0; y++; }
   }
-  freeElements initial;
+  
+  freeList initialPos;
+  freeList colResult;
 }

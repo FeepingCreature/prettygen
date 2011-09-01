@@ -259,7 +259,7 @@ void main() {
     gdImagePtr genImage() {
       auto gdp = gdImageCreateTrueColor(size);
       auto start = sec();
-      int stepsize = 32768 / size-of Element; // L1 size
+      int stepsize = 32768 / size-of (vec2f, vec3f); // L1 size
       int aa2 = aa * aa;
       if (stepsize / aa2 #*aa2 != stepsize) {
         auto newstep = stepsize * aa2; // stepsize needs to be divisible by aa2, which may be npot

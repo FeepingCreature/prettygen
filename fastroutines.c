@@ -9,11 +9,6 @@ typedef struct {
   float x, y;
 } __attribute__ ((aligned (4))) vec2f;
 
-typedef struct {
-  vec2f pos;
-  vec3f col;
-} Element;
-
 typedef float v4sf __attribute__ ((vector_size (16)));
 typedef int v4si __attribute__ ((vector_size (16)));
 
@@ -24,14 +19,14 @@ void ALIGNED fast_memcpy(void* dest, void* src, int n) {
   __builtin_memcpy(dest, src, n);
 }
 
-void ALIGNED fast_sine_step(float phase, float freq, int count, Element *res, Element *op2) {
+void ALIGNED fast_sin(float phase, float freq, int count, vec3f *col) {
   for (int i = 0; i < count; ++i) {
-    res[i].col.x = sinf(phase + freq * op2[i].col.x);
-    res[i].col.y = sinf(phase + freq * op2[i].col.y);
-    res[i].col.z = sinf(phase + freq * op2[i].col.z);
+    col[i].x = sinf(phase + freq * col[i].x);
+    col[i].y = sinf(phase + freq * col[i].y);
+    col[i].z = sinf(phase + freq * col[i].z);
   }
 }
-
+/*
 void ALIGNED fast_supersin(float *phases, float *freqs, int count, Element *res, Element *op2) {
   for (int i = 0; i < count; ++i) {
     res[i].col.x = sinf(phases[0] + freqs[0] * op2[i].col.x);
@@ -47,7 +42,7 @@ void ALIGNED fast_tent_step(int count, Element *res, Element *op2) {
     res[i].col.z = 1.0f - 2.0f * fabsf(op2[i].col.z);
   }
 }
-
+*/
 // Thanks to http://jrfonseca.blogspot.com/2008/09/fast-sse2-pow-tables-or-polynomials.html
 #include <xmmintrin.h>
 #define EXP_POLY_DEGREE 3

@@ -61,7 +61,7 @@ string readback(string cmd, string data) {
 
 import std.time, std.string, std.thread, std.file, gd;
 extern(C) char* getenv(char*);
-extern(C) FILE* stdout;
+extern(C) FILE* stdout, stderr;
 void main() {
   set-handler(Error err) {
     writeln "Content-type: text/html";
@@ -83,6 +83,7 @@ void main() {
   (int, int) depth;
   string treepath;
   int gifmode;
+  bool hsv;
   void parseParams(string params) {
     int treeCost() {
       int recurse(Operator tree) {
@@ -127,6 +128,7 @@ void main() {
       } else raise-error new Error "Unknown URL parameter: $part";
     }
     initTree();
+    hsv = bool:(rand() & 1);
   }
   string tree_graph() {
     int count;
@@ -177,7 +179,11 @@ void main() {
     </head>
     <body>
     Seed: $seed<br>
-    <a href=\"?derivation&$rest\">Derivation</a>&nbsp;<a href=\"http://api.imgur.com/2/upload?url=$(\"http://$SERVER_NAME:$SERVER_PORT$SCRIPT_NAME?img&$rest\".urlencode())\">Upload to imgur</a><br />
+    <a href=\"?derivation&$rest\">Derivation</a>&nbsp;
+    <a href=\"?img&hq&$rest\">HQ</a>&nbsp;
+    <a href=\"http://api.imgur.com/2/upload?url=$(\"http://$SERVER_NAME:$SERVER_PORT$SCRIPT_NAME?img&$rest\".urlencode())\">Upload to imgur</a>
+    <a href=\"http://api.imgur.com/2/upload?url=$(\"http://$SERVER_NAME:$SERVER_PORT$SCRIPT_NAME?img&hq&$rest\".urlencode())\">(HQ)</a>
+    <br />
     <img style=\"margin: 5px; border: solid 1px; \" src=\"?img&$rest\" /><br>
     </body>
     </html>";
@@ -277,7 +283,7 @@ void main() {
         int y = i / linewidth;
         i -= y * linewidth;
         int x = i / aa2;
-        calcSegment(x, y, stepsize, size, aa, tree, gdp, offs);
+        calcSegment(x, y, stepsize, size, aa, tree, gdp, offs, hsv => hsv);
       });
       auto stop = sec();
       // writeln "Time taken: $(float:(stop - start))";

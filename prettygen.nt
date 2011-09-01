@@ -2,6 +2,23 @@ module prettygen;
 
 import prettyops;
 
+string urlencode(string s) {
+  return s
+    .replace(`$`, "%24")
+    .replace("&", "%26")
+    .replace("+", "%2B")
+    .replace(",", "%2C")
+    .replace("/", "%2F")
+    .replace(":", "%3A")
+    .replace(";", "%3B")
+    .replace("=", "%3D")
+    .replace("?", "%3F")
+    .replace("@", "%40")
+    .replace("~", "%7E")
+    .replace("%", "%25") // fuck you
+  ;
+}
+
 import std.string;
 import c.stdlib, c.poll, c.unistd;
 string readback(string cmd, string data) {
@@ -57,6 +74,9 @@ void main() {
   }
   initOps();
   string queryString = CToString getenv toStringz "QUERY_STRING";
+  string SERVER_NAME = CToString getenv toStringz "SERVER_NAME";
+  string SERVER_PORT = CToString getenv toStringz "SERVER_PORT";
+  string SCRIPT_NAME = CToString getenv toStringz "SCRIPT_NAME";
   Operator tree;
   int aa = 1, seed;
   (int, int) size = (512, 512);
@@ -157,7 +177,7 @@ void main() {
     </head>
     <body>
     Seed: $seed<br>
-    <a href=\"?derivation&$rest\">Derivation</a><br>
+    <a href=\"?derivation&$rest\">Derivation</a>&nbsp;<a href=\"http://api.imgur.com/2/upload?url=$(\"http://$SERVER_NAME:$SERVER_PORT$SCRIPT_NAME?img&$rest\".urlencode())\">Upload to imgur</a><br />
     <img style=\"margin: 5px; border: solid 1px; \" src=\"?img&$rest\" /><br>
     </body>
     </html>";
@@ -272,6 +292,7 @@ void main() {
       auto file = c.gd.FILE*:stdout;
       auto prev = genImage();
       gdImageGifAnimBegin(prev, file, 1, 0);
+      gdImageGifAnimAdd(prev, file, 1, 0, 0, 100/gifmode, gdDisposalNone, gdImagePtr:0);
       for int i <- 1..gifmode {
         delta = i * 1f / gifmode;
         auto img = genImage();

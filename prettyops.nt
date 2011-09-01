@@ -10,11 +10,15 @@ Element[][auto~] freelist;
 int offs;
 int streamsize;
 
+float delta;
+
 Element[] allocElements() {
   if (freelist.length - offs) {
     return freelist[offs++];
   }
-  return new Element[] streamsize;
+  auto res = new Element[] (streamsize + 1)#.ptr;
+  res = Element*:((int:res + 15) & -16); // align
+  return res[0..streamsize];
 }
 void freeElements(Element[] array) {
   freelist ~= array;
@@ -44,6 +48,31 @@ class Variable-Y : Operator {
   void init() super.init (0, "Variable-Y");
   void process(Element[] args) {
     for int i <- 0..args.length { args[i].col = (*vec3f* :&args[i].pos).yyy; }
+  }
+}
+
+class Distance : Operator {
+  void init() super.init (0, "Distance");
+  void process(Element[] args) {
+    for int i <- 0..args.length { auto pos = args[i].pos; args[i].col = vec3f((pos*pos).(x+y) - 1); }
+  }
+}
+
+extern(C) float fmodf(float f, g);
+
+float wrap(float f) {
+  f += 1;
+  return f - floorf (f / 2) * 2 - 1;
+}
+
+class Angle : Operator {
+  int factor;
+  void init() {
+    super.init (0, "Angle");
+    factor = rand() % 8 + 1;
+  }
+  void process(Element[] args) {
+    for int i <- 0..args.length { auto pos = args[i].pos; args[i].col = vec3f(wrap(factor * atan2(pos.y, pos.x) / PI + delta * 2)); }
   }
 }
 
@@ -108,10 +137,15 @@ class SinCos : Operator {
   void process(Element[] args) {
     for int i <- 0..args.length {
       auto pos = args[i].pos;
-      args[i].col = vec3f(sin pos.x, cos pos.y, 0);
+      args[i].col = vec3f(sin (pos.x + delta * PI2), cos (pos.y + delta * PI2), 0);
     }
   }
 }
+
+extern(C) void fast_memcpy(void* to, from, int length);
+extern(C) void fast_pow_vec(vec4f* v1, vec4f* v2, vec4f* res);
+
+extern(C) void fast_supersin(float *phases, float *freqs, int count, Element* res, Element* op2);
 
 class SuperSin : Operator {
   float x 3 phase, freq;
@@ -126,10 +160,12 @@ class SuperSin : Operator {
   void process(Element[] args) {
     auto copy = allocElements();
     
-    copy[] = args[];
+    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
     
     childs[0].process copy;
     
+    fast_supersin(phase.ptr, freq.ptr, args.length, args.ptr, copy.ptr);
+    /*
     for int i <- 0..args.length {
       auto p2 = &copy[i].col;
       args[i].col = vec3f(
@@ -138,7 +174,7 @@ class SuperSin : Operator {
         sin (phase[2] + freq[2] * p2.z)
       );
     }
-    
+    */
     freeElements copy;
   }
 }
@@ -153,7 +189,8 @@ class ColMatrix : Operator {
   void process(Element[] args) {
     auto copy = allocElements();
     
-    copy[] = args[]; childs[0].process copy;
+    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
+    childs[0].process copy;
     
     for int i <- 0..args.length {
       auto col = copy[i].col;
@@ -210,8 +247,8 @@ class Sum : Operator {
   void process(Element[] args) {
     auto copy1 = allocElements(), copy2 = allocElements();
     
-    copy1[] = args[];
-    copy2[] = args[];
+    fast_memcpy(copy1.ptr, args.ptr, args.length * size-of Element);
+    fast_memcpy(copy2.ptr, args.ptr, args.length * size-of Element);
     
     childs[0].process copy1;
     childs[1].process copy2;
@@ -229,8 +266,8 @@ class Product : Operator {
   void process(Element[] args) {
     auto copy1 = allocElements(), copy2 = allocElements();
     
-    copy1[] = args[];
-    copy2[] = args[];
+    fast_memcpy(copy1.ptr, args.ptr, args.length * size-of Element);
+    fast_memcpy(copy2.ptr, args.ptr, args.length * size-of Element);
     
     childs[0].process copy1;
     childs[1].process copy2;
@@ -242,23 +279,26 @@ class Product : Operator {
   }
 }
 
-extern(C) float fmodf(float, float);
+float mymodf(float a, b) {
+  if (b == 0) b = 0.0001;
+  return fmodf(a, b);
+}
+
 class Mod : Operator {
   void init() super.init (2, "Mod");
   string toString() { return "Mod($$childs[0], $$childs[1])"; }
   void process(Element[] args) {
-    auto copy1 = allocElements(), copy2 = allocElements();
+    auto copy = allocElements();
     
-    copy1[] = args[];
-    copy2[] = args[];
+    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
     
-    childs[0].process copy1;
-    childs[1].process copy2;
+    childs[0].process args;
+    childs[1].process copy;
     
     for int i <- 0..args.length
-      args[i].col = vec3f(fmodf(copy1[i].col.x, copy2[i].col.x), fmodf(copy1[i].col.y, copy2[i].col.y), fmodf(copy1[i].col.z, copy2[i].col.z));
+      args[i].col = vec3f(mymodf(args[i].col.x, copy[i].col.x), mymodf(args[i].col.y, copy[i].col.y), mymodf(args[i].col.z, copy[i].col.z));
     
-    freeElements copy1; freeElements copy2;
+    freeElements copy;
   }
 }
 
@@ -268,7 +308,7 @@ class Well : Operator {
   void process(Element[] args) {
     auto copy = allocElements();
     
-    copy[] = args[];
+    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
     
     childs[0].process copy;
     
@@ -295,7 +335,7 @@ class Tent : Operator {
   void process(Element[] args) {
     auto copy = allocElements();
     
-    copy[] = args[];
+    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
     
     childs[0].process copy;
     
@@ -319,7 +359,7 @@ class Sin : Operator {
   void process(Element[] args) {
     auto copy = allocElements();
     
-    copy[] = args[];
+    fast_memcpy(copy.ptr, args.ptr, args.length * size-of Element);
     
     childs[0].process copy;
     
@@ -346,10 +386,17 @@ class Level : Operator {
   string toString() { return "Level($$childs[0], $$childs[1], $$childs[2])"; }
   void process(Element[] args) {
     Element[] copy0, copy1, copy2;
-    copy0 = allocElements(); copy0[] = args; childs[0].process copy0;
-    copy1 = allocElements(); copy1[] = args; childs[1].process copy1;
-    copy2 = allocElements(); copy2[] = args; childs[2].process copy2;
+    copy0 = allocElements();
+    fast_memcpy(copy0.ptr, args.ptr, args.length * size-of Element);
+    childs[0].process copy0;
     
+    copy1 = allocElements();
+    fast_memcpy(copy1.ptr, args.ptr, args.length * size-of Element);
+    childs[1].process copy1;
+    
+    copy2 = allocElements();
+    fast_memcpy(copy2.ptr, args.ptr, args.length * size-of Element);
+    childs[2].process copy2;
     
     for int k <- 0..args.length {
       auto c0 = &copy0[k].col;
@@ -375,9 +422,17 @@ class Mix : Operator {
   string toString() { return "Mix($$childs[0], $$childs[1], $$childs[2])"; }
   void process(Element[] args) {
     Element[] copy0, copy1, copy2;
-    copy0 = allocElements(); copy0[] = args; childs[0].process copy0;
-    copy1 = allocElements(); copy1[] = args; childs[1].process copy1;
-    copy2 = allocElements(); copy2[] = args; childs[2].process copy2;
+    copy0 = allocElements();
+    fast_memcpy(copy0.ptr, args.ptr, args.length * size-of Element);
+    childs[0].process copy0;
+    
+    copy1 = allocElements();
+    fast_memcpy(copy1.ptr, args.ptr, args.length * size-of Element);
+    childs[1].process copy1;
+    
+    copy2 = allocElements();
+    fast_memcpy(copy2.ptr, args.ptr, args.length * size-of Element);
+    childs[2].process copy2;
     
     for int k <- 0..args.length {
       xmm[4] = copy0[k].col;
@@ -399,15 +454,18 @@ Operator delegate()[] arity0-ops, ops;
 void initOps() {
   arity0-ops ~= delegate Operator() { return new Variable-X; };
   arity0-ops ~= delegate Operator() { return new Variable-Y; };
+  arity0-ops ~= delegate Operator() { return new Distance; };
   arity0-ops ~= delegate Operator() { return new Matrix; };
   arity0-ops ~= delegate Operator() { return new Constant; };
   arity0-ops ~= delegate Operator() { return new SinCos; };
+  arity0-ops ~= delegate Operator() { return new Angle; };
   ops ~= delegate Operator() { return new SuperSin; };
   ops ~= delegate Operator() { return new ColMatrix; };
   ops ~= delegate Operator() { return new PosMatrix; };
   ops ~= delegate Operator() { return new ComplexSquare; };
   ops ~= delegate Operator() { return new Sum; };
   ops ~= delegate Operator() { return new Product; };
+  ops ~= delegate Operator() { return new Mod; };
   ops ~= delegate Operator() { return new Well; };
   ops ~= delegate Operator() { return new Tent; };
   ops ~= delegate Operator() { return new Sin; };
@@ -455,30 +513,41 @@ vec3f hsv2rgb(vec3f hsv) {
 }
 
 vec3f gamma2linear(vec3f v) {
-  return vec3f(pow(v.x, 2.2), pow(v.y, 2.2), pow(v.z, 2.2));
+  vec4f exp = vec4f(2.2);
+  vec4f lv = v;
+  vec4f res = void;
+  fast_pow_vec(&lv, &exp, &res);
+  return vec3f:res;
 }
 
 vec3f linear2gamma(vec3f v) {
-  return vec3f(pow(v.x, 1/2.2), pow(v.y, 1/2.2), pow(v.z, 1/2.2));
+  vec4f exp = vec4f(1/2.2);
+  vec4f lv = v;
+  vec4f res = void;
+  fast_pow_vec(&lv, &exp, &res);
+  return vec3f:res;
 }
 
 import gd, sdl;
-void calcLine(int yfrom, yto, width, height, int aa, Operator tree, gdImagePtr gdp, float offs) {
-  streamsize = width * (yto - yfrom) * aa * aa;
+void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdImagePtr gdp, float offs) {
+  streamsize = distance;
   auto initial = allocElements();
+  auto backup = (x, y);
   int i;
   float halfw = width / 2f;
-  for (int y, int x) <- cross(yfrom..yto, 0..width) {
+  while (i < distance) {
     for (int y2, int x2) <- cross(0..aa, 0..aa) {
       float fx2 = x2 * 1f / aa, fy2 = y2 * 1f / aa;
       float fx = x + fx2, fy = y + fy2;
       initial[i].pos = vec2f(fx/halfw - 1f, (fy + (width - height) / 2)/halfw - 1f);
       i++;
     }
+    if (++x == width) { x = 0; y++; }
   }
   tree.process initial;
+  (x, y) = backup;
   i = 0;
-  for (int y, int x) <- cross(yfrom..yto, 0..width) {
+  while (i < distance) {
     vec3f sum = vec3f(0);
     float bound(float low, high, v) {
       if (v < low) return low;
@@ -499,6 +568,7 @@ void calcLine(int yfrom, yto, width, height, int aa, Operator tree, gdImagePtr g
     // col.x = bound(0, 1, fmodf(col.x + offs, 1));
     // col = hsv2rgb col;
     gdp.tpixels[y][width - 1 - x] = floatToIntColor col;
+    if (++x == width) { x = 0; y++; }
   }
   freeElements initial;
 }

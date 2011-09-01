@@ -62,6 +62,7 @@ void main() {
   (int, int) size = (512, 512);
   (int, int) depth;
   string treepath;
+  int gifmode;
   void parseParams(string params) {
     int treeCost() {
       int recurse(Operator tree) {
@@ -93,6 +94,7 @@ void main() {
       }
       else if (auto rest = part.startsWith "hq") aa = 6;
       else if (auto rest = part.startsWith "aa=") aa = rest.atoi();
+      else if (auto rest = part.startsWith "gif=") gifmode = rest.atoi();
       else if (auto rest = part.startsWith "treepath=") {
         if (!seed) raise-error new Error "Must define seed before treepath! ";
         initTree();
@@ -156,7 +158,7 @@ void main() {
     <body>
     Seed: $seed<br>
     <a href=\"?derivation&$rest\">Derivation</a><br>
-    <img style=\"margin: 5px; border: solid 1px; \" src=\"?img$rest\" /><br>
+    <img style=\"margin: 5px; border: solid 1px; \" src=\"?img&$rest\" /><br>
     </body>
     </html>";
     return;
@@ -185,9 +187,11 @@ void main() {
     string recurse(Operator op, string treepath) {
       string nodename = "node_$(count++)";
       auto pos = lookupNodePosition nodename;
+      string extra;
+      if (gifmode) extra = "&gif=$gifmode";
       extra_info ~= "
         <a href=\"?picture&seed=$seed&size=512&treepath=$treepath\">
-        <img src=\"?img&seed=$seed&size=64&treepath=$treepath\" style=\"position: absolute; left: $(pos[0] - 20)pt; top: $(graphsize[1] - pos[1] - 20)pt; \" />
+        <img src=\"?img&seed=$seed&size=64&treepath=$treepath$extra\" style=\"position: absolute; left: $(pos[0] - 20)pt; top: $(graphsize[1] - pos[1] - 20)pt; \" />
         </a>";
       for (int i, Operator ch) <- zip(0..-1, op.childs) {
         string chname = recurse(ch, "$treepath$i-");
@@ -225,29 +229,64 @@ void main() {
     return;
   }
   if (auto rest = queryString.startsWith "img") {
-    writeln "Content-type: image/png";
-    writeln "";
-    
     seed = delegate int() { long l = µsec(); return *int* :&l; }();
     if (rest.startsWith "&") rest = rest[1..$];
     
     parseParams rest;
     
     float offs = randf();
-    auto gdp = gdImageCreateTrueColor(size);
-    onSuccess gdImageDestroy gdp;
-    auto start = sec();
     auto lp = new LoopPool 4;
-    alias step = 1;
-    lp.runLoop(size[1] / step, delegate void(int i, thr) {
-      calcLine(i*step, (i+1)*step, size, aa, tree, gdp, offs);
-    });
-    auto stop = sec();
-    // writeln "Time taken: $(float:(stop - start))";
-    // auto hdl = fopen ("pretty.png", "w");
-    // gdImagePng(gdp, c.gd.FILE*: hdl);
-    // fclose hdl;
-    gdImagePng(gdp, c.gd.FILE*:stdout);
+    gdImagePtr genImage() {
+      auto gdp = gdImageCreateTrueColor(size);
+      auto start = sec();
+      int stepsize = 32768 / size-of Element; // L1 size
+      int aa2 = aa * aa;
+      if (stepsize / aa2 #*aa2 != stepsize) {
+        auto newstep = stepsize * aa2; // stepsize needs to be divisible by aa2, which may be npot
+        while (newstep > stepsize && newstep & 1)
+          newstep /= 2;
+        stepsize = newstep;
+        if (stepsize / aa2 #*aa2 != stepsize) {
+          raise-error new Error "Huh. ";
+        }
+      }
+      auto totalSteps = size[0] * size[1] * aa2;
+      lp.runLoop(totalSteps / stepsize, delegate void(int i, thr) {
+        i *= stepsize;
+        auto linewidth = size[0] * aa2;
+        int y = i / linewidth;
+        i -= y * linewidth;
+        int x = i / aa2;
+        calcSegment(x, y, stepsize, size, aa, tree, gdp, offs);
+      });
+      auto stop = sec();
+      // writeln "Time taken: $(float:(stop - start))";
+      // auto hdl = fopen ("pretty.png", "w");
+      // gdImagePng(gdp, c.gd.FILE*: hdl);
+      // fclose hdl;
+      return gdp;
+    }
+    if (gifmode) {
+      writeln "Content-type: image/gif";
+      writeln "";
+      auto file = c.gd.FILE*:stdout;
+      auto prev = genImage();
+      gdImageGifAnimBegin(prev, file, 1, 0);
+      for int i <- 1..gifmode {
+        delta = i * 1f / gifmode;
+        auto img = genImage();
+        gdImageGifAnimAdd(img, file, 1, 0, 0, 100/gifmode, 0, prev);
+        gdImageDestroy prev;
+        prev = img;
+      }
+      gdImageGifAnimEnd(file);
+      gdImageDestroy prev;
+    } else {
+      writeln "Content-type: image/png";
+      writeln "";
+      gdImagePng(auto gdp = genImage(), c.gd.FILE*:stdout);
+      gdImageDestroy gdp;
+    }
     return;
   }
   
@@ -261,7 +300,7 @@ void main() {
     initRNG *int*: &l;
     for (int i = 0; i < count; ++i) {
       auto newseed = rand();
-      res ~= "<div class=\"gallery_pic\"><a href=\"?picture&seed=$newseed&$queryString\"><img src=\"?img&seed=$newseed&size=128\" /></a><br></div>";
+      res ~= "<div class=\"gallery_pic\"><a href=\"?picture&seed=$newseed&$queryString\"><img width=128 height=128 src=\"?img&seed=$newseed&size=128\" /></a><br></div>";
     }
     return res[];
   }

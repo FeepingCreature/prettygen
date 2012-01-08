@@ -6,7 +6,9 @@ int offs_vec2, offs_vec3;
 
 int streamsize;
 
-shared float delta;
+pragma(linker, "fastroutines.o");
+
+extern(C) float delta;
 
 vec2f[] allocVec2() {
   if (freelist_vec2.length - offs_vec2) {
@@ -33,7 +35,7 @@ class Operator {
   Operator[] childs;
   string name;
   void init(int arity, string name) { if arity childs = new Operator[] arity; this.name = name; }
-  void process(vec2f[] pos, vec3f[] col) { raise-error new Error "Unimplemented: Operator::process"; }
+  void process(vec2f[] pos, vec3f[] col) { raise new Error "Unimplemented: Operator::process"; }
 }
 
 import std.random, std.math;
@@ -44,14 +46,14 @@ void initRNG(int seed) { rng = getPRNG seed; }
 
 extern(C) float fabsf(float);
 
-template NullArity(alias A) <<EOT
+template NullArity(alias A) {
   class NullArity : Operator {
     void init() super.init (0, A[0]);
     void process(vec2f[] poslist, vec3f[] col) {
       for int i <- 0..poslist.length { auto pos = poslist[i]; col[i] = mixin(A[1]); }
     }
   }
-EOT
+}
 
 alias Variable-X = NullArity!("Variable-X", "(*vec3f*: &pos).xxx");
 alias Variable-Y = NullArity!("Variable-Y", "(*vec3f*: &pos).yyy");
@@ -66,6 +68,7 @@ float wrap(float f) {
   return f - floorf (f / 2) * 2 - 1;
 }
 
+extern(C) void fast_angle(int factor, int count, vec2f* pos, vec3f* col);
 class Angle : Operator {
   int factor;
   void init() {
@@ -73,7 +76,8 @@ class Angle : Operator {
     factor = rand() % 8 + 1;
   }
   void process(vec2f[] poslist, vec3f[] col) {
-    for int i <- 0..poslist.length { auto pos = poslist[i]; col[i] = vec3f(wrap(factor * atan2(pos.y, pos.x) / PI + delta * 2)); }
+    fast_angle(factor, poslist.(length, ptr), col.ptr);
+    // for int i <- 0..poslist.length { auto pos = poslist[i]; col[i] = vec3f(wrap(factor * atan2(pos.y, pos.x) / PI + delta * 2)); }
   }
 }
 
@@ -98,6 +102,7 @@ class Matrix : Operator {
   }
 }
 
+extern(C) void fast_posmatrix(float* parts, int count, vec2f* inp, vec2f* outp);
 class PosMatrix : Operator {
   float x 6 parts;
   void init() {
@@ -112,6 +117,8 @@ class PosMatrix : Operator {
   void process(vec2f[] poslist, vec3f[] col) {
     auto copy = allocVec2();
     
+    fast_posmatrix(parts.ptr, poslist.length, poslist.ptr, copy.ptr);
+    /*
     for int i <- 0..poslist.length {
       auto pos = poslist[i];
       copy[i] = vec2f(
@@ -119,6 +126,7 @@ class PosMatrix : Operator {
         parts[3] * pos.x + parts[4] * pos.y + parts[5]
       );
     }
+    */
     
     childs[0].process (copy, col);
     
@@ -126,21 +134,26 @@ class PosMatrix : Operator {
   }
 }
 
+extern(C) void fast_sincos(int count, vec2f* pos, vec3f* col);
 class SinCos : Operator {
   void init() {
     super.init (0, "SinCos");
   }
   void process(vec2f[] poslist, vec3f[] col) {
+    fast_sincos(poslist.(length, ptr), col.ptr);
+    /*
     for int i <- 0..poslist.length {
       auto pos = poslist[i];
       col[i] = vec3f(sin (pos.x + delta * PI2), cos (pos.y + delta * PI2), 0);
     }
+    */
   }
 }
 
 extern(C) void fast_memcpy(void* to, from, int length);
 extern(C) void fast_pow_vec(vec4f* v1, vec4f* v2, vec4f* res);
 
+extern(C) void fast_supersin(float* phase, float* freq, int count, vec3f* col);
 class SuperSin : Operator {
   float x 3 phase, freq;
   void init() {
@@ -154,6 +167,8 @@ class SuperSin : Operator {
   void process(vec2f[] poslist, vec3f[] col) {
     childs[0].process (poslist, col);
     
+    fast_supersin(phase.ptr, freq.ptr, col.(length, ptr));
+    /*
     for int i <- 0..poslist.length {
       col[i] = vec3f(
         sin (phase[0] + freq[0] * col[i].x),
@@ -161,6 +176,7 @@ class SuperSin : Operator {
         sin (phase[2] + freq[2] * col[i].z)
       );
     }
+    */
   }
 }
 
@@ -378,6 +394,51 @@ class Mix : Operator {
   }
 }
 
+class MixChannels : Operator {
+  void init() {
+    super.init (3, "MixChannels");
+  }
+  string toString() { return "MixChannels($$childs[0], $$childs[1], $$childs[2])"; }
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto col2 = allocVec3(), col3 = allocVec3();
+    childs[0].process (poslist, col);
+    childs[1].process (poslist, col2);
+    childs[2].process (poslist, col3);
+    
+    for int k <- 0..poslist.length {
+      xmm[4] = col[k];
+      xmm[4] = vec3f(1) + vec3f:xmm[4] #*vec3f(0.5); // -1..1 -> 0..1
+      xmm[5] = vec3f(1) - vec3f:xmm[4];
+      xmm[4] = vec3f:xmm[4] * col2[k];
+      xmm[5] = vec3f:xmm[5] * col3[k];
+      xmm[4] += xmm[5];
+      col[k] = xmm[4];
+    }
+    
+    freeList col2;
+    freeList col3;
+  }
+}
+
+class Reproject : Operator {
+  void init() {
+    super.init (2, "Reproject");
+  }
+  string toString() { return "Reproject ($$childs[0], $$childs[1])"; }
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto pos2 = allocVec2();
+    
+    childs[0].process (poslist, col);
+    
+    for int k <- 0..poslist.length
+      pos2[k] = col[k].xy;
+    
+    childs[1].process (pos2, col);
+    
+    freeList pos2;
+  }
+}
+
 Operator delegate()[] arity0-ops, ops;
 
 void initOps() {
@@ -402,6 +463,8 @@ void initOps() {
   ops ~= delegate Operator() { return new Sin; };
   ops ~= delegate Operator() { return new Level; };
   ops ~= delegate Operator() { return new Mix; };
+  ops ~= delegate Operator() { return new MixChannels; };
+  ops ~= delegate Operator() { return new Reproject; };
 }
 
 Operator genRandomBaseOp(int leafmode) {
@@ -465,12 +528,14 @@ void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdIma
   auto initialPos = allocVec2();
   auto backup = (x, y);
   int i;
-  float halfw = width / 2f;
+  float inv-halfw = 2f / width;
+  float inv-aa = 1f / aa;
+  float ratioshift = (width - height) / 2f;
   while (i < distance) {
     for (int y2, int x2) <- cross(0..aa, 0..aa) {
-      float fx2 = x2 * 1f / aa, fy2 = y2 * 1f / aa;
+      float fx2 = x2 * inv-aa, fy2 = y2 * inv-aa;
       float fx = x + fx2, fy = y + fy2;
-      initialPos[i] = vec2f(fx/halfw - 1f, (fy + (width - height) / 2)/halfw - 1f);
+      initialPos[i] = vec2f(fx * inv-halfw - 1f, (fy + ratioshift) * inv-halfw - 1f);
       i++;
     }
     if (++x == width) { x = 0; y++; }
@@ -489,6 +554,9 @@ void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdIma
     for (int y2, int x2) <- cross(0..aa, 0..aa) {
       vec3f res = colResult[i] * vec3f(0.5) + vec3f(0.5);
       // bound before AA!
+      float maxf(float a, b) return [a,b][eval b > a];
+      float m = maxf(res.x, maxf(res.y, res.z));
+      if (m > 1) res /= m;
       res.x = bound(0, 1, res.x);
       res.y = bound(0, 1, res.y);
       res.z = bound(0, 1, res.z);

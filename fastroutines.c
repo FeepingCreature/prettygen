@@ -12,6 +12,8 @@ typedef struct {
 typedef float v4sf __attribute__ ((vector_size (16)));
 typedef int v4si __attribute__ ((vector_size (16)));
 
+float delta;
+
 #define ALIGNED __attribute__ ((force_align_arg_pointer))
 
 void ALIGNED fast_memcpy(void* dest, void* src, int n) {
@@ -26,15 +28,45 @@ void ALIGNED fast_sin(float phase, float freq, int count, vec3f *col) {
     col[i].z = sinf(phase + freq * col[i].z);
   }
 }
-/*
-void ALIGNED fast_supersin(float *phases, float *freqs, int count, Element *res, Element *op2) {
+
+void ALIGNED fast_supersin(float *phase, float *freq, int count, vec3f *col) {
   for (int i = 0; i < count; ++i) {
-    res[i].col.x = sinf(phases[0] + freqs[0] * op2[i].col.x);
-    res[i].col.y = sinf(phases[1] + freqs[1] * op2[i].col.y);
-    res[i].col.z = sinf(phases[2] + freqs[2] * op2[i].col.z);
+    col[i].x = sinf(phase[0] + freq[0] * col[i].x);
+    col[i].y = sinf(phase[1] + freq[1] * col[i].y);
+    col[i].z = sinf(phase[2] + freq[2] * col[i].z);
   }
 }
 
+#define PI (3.1415926538)
+#define PI2 (PI*2)
+
+void ALIGNED fast_sincos(int count, vec2f *pos, vec3f *col) {
+  for (int i = 0; i < count; ++i) {
+    col[i].x = sinf(pos[i].x + delta * PI2);
+    col[i].y = cosf(pos[i].y + delta * PI2);
+    col[i].z = 0;
+  }
+}
+
+void ALIGNED fast_posmatrix(float *parts, int count, vec2f *inp, vec2f *outp) {
+  for (int i = 0; i < count; ++i) {
+    outp[i].x = inp[i].x * parts[0] + inp[i].y * parts[1] + parts[2];
+    outp[i].y = inp[i].x * parts[3] + inp[i].y * parts[4] + parts[5];
+  }
+}
+
+#define WRAP(f) ({ float f2 = (f) + 1; f2 - floorf (f2 / 2) * 2 - 1; })
+
+void ALIGNED fast_angle(int factor, int count, vec2f* pos, vec3f* col) {
+  for (int i = 0; i < count; ++i) {
+    float f = WRAP(factor * atan2(pos[i].y, pos[i].x) / PI + delta * 2);
+    col[i].x = f;
+    col[i].y = f;
+    col[i].z = f;
+  }
+}
+
+/*
 void ALIGNED fast_tent_step(int count, Element *res, Element *op2) {
   for (int i = 0; i < count; ++i) {
     res[i].col.x = 1.0f - 2.0f * fabsf(op2[i].col.x);

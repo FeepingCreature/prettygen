@@ -2,6 +2,10 @@ module prettygen;
 
 import prettyops;
 
+int rand() { return prettyops.rand(); }
+
+import std.time;
+
 string urlencode(string s) {
   return s
     .replace(`$`, "%24")
@@ -49,7 +53,7 @@ string readback(string cmd, string data) {
       if fds[1].revents & POLLOUT {
         auto res = write data.(hdl_sysward[1], ptr, length);
         if res < 0 {
-          raise-error new Error "Write error";
+          raise new Error "Write error";
         }
         data = data[res .. $];
         if !data.length { close hdl_sysward[1]; fdslength = 1; }
@@ -59,10 +63,11 @@ string readback(string cmd, string data) {
   return result[];
 }
 
-import std.time, std.string, std.thread, std.file, gd;
+import std.thread, std.file, gd;
 extern(C) char* getenv(char*);
 extern(C) FILE* stdout, stderr;
 void main() {
+  delta = 0;
   set-handler(Error err) {
     writeln "Content-type: text/html";
     writeln "";
@@ -103,6 +108,7 @@ void main() {
         tree = genTree(depth);
       } while (treeCost() > 256) { } // reject trees that are too expensive
     }
+    if auto rest = params.startsWith "&" params = rest;
     auto parts = params.split "&";
     for auto part <- parts {
       if (auto rest = part.startsWith "seed=") seed = rest.atoi();
@@ -117,7 +123,7 @@ void main() {
       else if (auto rest = part.startsWith "aa=") aa = rest.atoi();
       else if (auto rest = part.startsWith "gif=") gifmode = rest.atoi();
       else if (auto rest = part.startsWith "treepath=") {
-        if (!seed) raise-error new Error "Must define seed before treepath! ";
+        if (!seed) raise new Error "Must define seed before treepath! ";
         initTree();
         (treepath, params) = rest.slice "&";
         string tp = treepath;
@@ -125,10 +131,10 @@ void main() {
           (string step, tp) = tp.slice "-";
           tree = tree.childs[step.atoi()];
         }
-      } else raise-error new Error "Unknown URL parameter: $part";
+      } else raise new Error "Unknown URL parameter: $part";
     }
     initTree();
-    hsv = bool:(rand() & 1);
+    hsv = !!(rand() & 1);
   }
   string tree_graph() {
     int count;
@@ -152,7 +158,6 @@ void main() {
     fflush(stdout);
     
     seed = delegate int() { long l = µsec(); return *int* :&l; }();
-    if (rest.startsWith "&") rest = rest[1..$];
     
     parseParams rest;
     
@@ -169,7 +174,6 @@ void main() {
     writeln "";
     
     seed = delegate int() { long l = µsec(); return *int* :&l; }();
-    if (rest.startsWith "&") rest = rest[1..$];
     
     parseParams rest;
     
@@ -179,12 +183,12 @@ void main() {
     </head>
     <body>
     Seed: $seed<br>
-    <a href=\"?derivation&$rest\">Derivation</a>&nbsp;
-    <a href=\"?img&hq&$rest\">HQ</a>&nbsp;
-    <a href=\"http://api.imgur.com/2/upload?url=$(\"http://$SERVER_NAME:$SERVER_PORT$SCRIPT_NAME?img&$rest\".urlencode())\">Upload to imgur</a>
-    <a href=\"http://api.imgur.com/2/upload?url=$(\"http://$SERVER_NAME:$SERVER_PORT$SCRIPT_NAME?img&hq&$rest\".urlencode())\">(HQ)</a>
+    <a href=\"?derivation$rest\">Derivation</a>&nbsp;
+    <a href=\"?picture&hq$rest\">HQ</a>&nbsp;
+    <a href=\"http://api.imgur.com/2/upload?url=$(\"http://$SERVER_NAME:$SERVER_PORT$SCRIPT_NAME?img$rest\".urlencode())\">Upload to imgur</a>
+    <a href=\"http://api.imgur.com/2/upload?url=$(\"http://$SERVER_NAME:$SERVER_PORT$SCRIPT_NAME?img&hq$rest\".urlencode())\">(HQ)</a>
     <br />
-    <img style=\"margin: 5px; border: solid 1px; \" src=\"?img&$rest\" /><br>
+    <img style=\"margin: 5px; border: solid 1px; \" src=\"?img$rest\" /><br>
     </body>
     </html>";
     return;
@@ -206,7 +210,7 @@ void main() {
           return (a.atoi(), b.atoi());
         }
       }
-      raise-error new Error "Internal error: no such node: $nodename";
+      raise new Error "Internal error: no such node: $nodename";
     }
     char[auto~] extra_info;
     int count;
@@ -216,7 +220,7 @@ void main() {
       string extra;
       if (gifmode) extra = "&gif=$gifmode";
       extra_info ~= "
-        <a href=\"?picture&seed=$seed&size=512&treepath=$treepath\">
+        <a href=\"?picture$rest&treepath=$treepath\">
         <img src=\"?img&seed=$seed&size=64&treepath=$treepath$extra\" style=\"position: absolute; left: $(pos[0] - 20)pt; top: $(graphsize[1] - pos[1] - 20)pt; \" />
         </a>";
       for (int i, Operator ch) <- zip(0..-1, op.childs) {
@@ -228,7 +232,7 @@ void main() {
     string res = "
     <div style=\"position: relative; width: $(graphsize[0])pt; height: $(graphsize[1])pt; \">
     $(extra_info[])
-    <img src=\"?basegraph&$rest\" style=\"position: absolute; z-index: 1; border: 1px solid; pointer-events: none; \"/>
+    <img src=\"?basegraph$rest\" style=\"position: absolute; z-index: 1; border: 1px solid; pointer-events: none; \"/>
     </div>";
     return res;
   }
@@ -237,7 +241,6 @@ void main() {
     writeln "";
     
     seed = delegate int() { long l = µsec(); return *int* :&l; }();
-    if (rest.startsWith "&") rest = rest[1..$];
     
     parseParams rest;
     
@@ -246,7 +249,7 @@ void main() {
     <title>Derivation of seed $seed</title>
     </head>
     <body>
-    <a href=\"?picture&$rest\">Back</a><br>
+    <a href=\"?picture$rest\">Back</a><br>
     $(tree_info(rest))
     <br>
     <img style=\"margin: 5px; border: solid 1px; \" src=\"?img$rest\" /><br>
@@ -256,7 +259,6 @@ void main() {
   }
   if (auto rest = queryString.startsWith "img") {
     seed = delegate int() { long l = µsec(); return *int* :&l; }();
-    if (rest.startsWith "&") rest = rest[1..$];
     
     parseParams rest;
     
@@ -273,7 +275,7 @@ void main() {
           newstep /= 2;
         stepsize = newstep;
         if (stepsize / aa2 #*aa2 != stepsize) {
-          raise-error new Error "Huh. ";
+          raise new Error "Huh. ";
         }
       }
       auto totalSteps = size[0] * size[1] * aa2;
@@ -319,6 +321,7 @@ void main() {
   
   int count = 64;
   if (auto rest = queryString.startsWith "count=") { (string c, queryString) = rest.slice "&"; count = c.atoi(); }
+  if (!queryString.startsWith "&" && queryString.length) queryString = "&$queryString";
   writeln "Content-type: text/html";
   writeln "";
   string img_gen() {
@@ -327,7 +330,7 @@ void main() {
     initRNG *int*: &l;
     for (int i = 0; i < count; ++i) {
       auto newseed = rand();
-      res ~= "<div class=\"gallery_pic\"><a href=\"?picture&seed=$newseed&$queryString\"><img width=128 height=128 src=\"?img&seed=$newseed&size=128\" /></a><br></div>";
+      res ~= "<div class=\"gallery_pic\"><a href=\"?picture&seed=$newseed$queryString\"><img width=128 height=128 src=\"?img&seed=$newseed&size=128\" /></a><br></div>";
     }
     return res[];
   }

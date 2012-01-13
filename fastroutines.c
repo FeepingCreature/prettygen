@@ -60,9 +60,7 @@ void ALIGNED fast_posmatrix(float *parts, int count, vec2f *inp, vec2f *outp) {
 void ALIGNED fast_angle(int factor, int count, vec2f* pos, vec3f* col) {
   for (int i = 0; i < count; ++i) {
     float f = WRAP(factor * atan2(pos[i].y, pos[i].x) / PI + delta * 2);
-    col[i].x = f;
-    col[i].y = f;
-    col[i].z = f;
+    col[i] = (vec3f) {f, f, f, f};
   }
 }
 

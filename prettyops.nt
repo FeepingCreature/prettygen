@@ -1,5 +1,7 @@
 module prettyops;
 
+int version_id;
+
 vec2f[][auto~] freelist_vec2;
 vec3f[][auto~] freelist_vec3;
 int offs_vec2, offs_vec3;
@@ -36,6 +38,17 @@ class Operator {
   string name;
   void init(int arity, string name) { if arity childs = new Operator[] arity; this.name = name; }
   void process(vec2f[] pos, vec3f[] col) { raise new Error "Unimplemented: Operator::process"; }
+  Operator[] getFromDepth(int d) {
+    Operator[auto~] res;
+    for auto ch <- childs if ch {
+      if (d <= 0) res ~= ch;
+      using ch.getFromDepth $ d - 1 {
+        res ~= that;
+        free;
+      }
+    }
+    return res[];
+  }
 }
 
 import std.random, std.math;
@@ -82,13 +95,14 @@ class Angle : Operator {
 }
 
 alias randrange = 1.1;
+float randfrange() { return randrange - randf() * randrange * 2; }
 
 class Matrix : Operator {
   float x 6 parts;
   void init() {
     super.init (0, "Matrix");
     for int i <- 0..6
-      parts[i] = randrange - randf() * randrange * 2;
+      parts[i] = randfrange();
   }
   void process(vec2f[] poslist, vec3f[] col) {
     for int i <- 0..poslist.length {
@@ -152,8 +166,8 @@ class SinCos : Operator {
 
 extern(C) void fast_memcpy(void* to, from, int length);
 extern(C) void fast_pow_vec(vec4f* v1, vec4f* v2, vec4f* res);
-
 extern(C) void fast_supersin(float* phase, float* freq, int count, vec3f* col);
+
 class SuperSin : Operator {
   float x 3 phase, freq;
   void init() {
@@ -439,6 +453,30 @@ class Reproject : Operator {
   }
 }
 
+class MixProject : Operator {
+  vec3f colf1, colf2;
+  vec2f posf;
+  void init() {
+    super.init (2, "MixProject");
+    colf1 = vec3f(randfrange() x 3);
+    colf2 = vec3f(randfrange() x 3);
+    posf = vec2f(randfrange() x 2);
+  }
+  string toString() { return "MixProject ($colf1, $colf2, $posf) ($$childs[0], $$childs[1])"; }
+  void process(vec2f[] poslist, vec3f[] col) {
+    auto pos2 = allocVec2();
+    
+    childs[0].process (poslist, col);
+    
+    for int k <- 0..poslist.length
+      pos2[k] = vec2f(col[k] * colf1 #.sum, col[k] * colf2 #.sum) + poslist[k] * posf;
+    
+    childs[1].process (pos2, col);
+    
+    freeList pos2;
+  }
+}
+
 Operator delegate()[] arity0-ops, ops;
 
 void initOps() {
@@ -451,7 +489,7 @@ void initOps() {
   arity0-ops ~= delegate Operator() { return new Angle; };
   arity0-ops ~= delegate Operator() { return new Square; };
   arity0-ops ~= delegate Operator() { return new ManHattan; };
-  ops ~= delegate Operator() { return new SuperSin; };
+  if (version_id < 2) ops ~= delegate Operator() { return new SuperSin; };
   ops ~= delegate Operator() { return new ColMatrix; };
   ops ~= delegate Operator() { return new PosMatrix; };
   ops ~= delegate Operator() { return new ComplexSquare; };
@@ -465,6 +503,9 @@ void initOps() {
   ops ~= delegate Operator() { return new Mix; };
   ops ~= delegate Operator() { return new MixChannels; };
   ops ~= delegate Operator() { return new Reproject; };
+  if (version_id >= 1) {
+    ops ~= delegate Operator() { return new MixProject; };
+  }
 }
 
 Operator genRandomBaseOp(int leafmode) {
@@ -473,11 +514,27 @@ Operator genRandomBaseOp(int leafmode) {
   if (leafmode == 0) return ops[rand() % $]();
 }
 
-Operator genTree(int depthFrom, depthTo) {
-  if (depthTo <= 0) return genRandomBaseOp leafmode=>2;
+void genTree(int depthFrom, depthTo, Operator* result, Operator root = null, int depth = 0) {
+  if (root && randf() < 1 - (1f / (depth + 1))) { // reuse existing entry
+    auto list = root.getFromDepth (depth + rand() % 3);
+    if (list.length > rand() % 10) {
+      *result = list[rand() % $];
+      return;
+    }
+  }
+  if (depthTo <= 0) {
+    *result = genRandomBaseOp leafmode=>2;
+    return;
+  }
   auto res = genRandomBaseOp leafmode=>[0, 1][eval depthFrom <= 0];
+  if (!root) root = res;
+  *result = res;
   for int i <- 0..res.childs.length
-    res.childs[i] = genTree (depthFrom - 1, depthTo - 1);
+    genTree (depthFrom - 1, depthTo - 1, &res.childs[i], root, depth + 1);
+}
+
+Operator genTree(int depthFrom, depthTo) {
+  genTree(depthFrom, depthTo, &Operator res);
   return res;
 }
 
@@ -523,19 +580,19 @@ vec3f linear2gamma(vec3f v) {
 }
 
 import gd, sdl;
-void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdImagePtr gdp, bool hsv, float offs) {
+void calcSegment(int x, y, distance, width, height, int aa, Operator tree, void delegate(int, int, int) dg, bool hsv, float offs) {
   streamsize = distance;
   auto initialPos = allocVec2();
   auto backup = (x, y);
   int i;
-  float inv-halfw = 2f / width;
+  float inv-halfh = 2f / height;
   float inv-aa = 1f / aa;
   float ratioshift = (width - height) / 2f;
   while (i < distance) {
     for (int y2, int x2) <- cross(0..aa, 0..aa) {
       float fx2 = x2 * inv-aa, fy2 = y2 * inv-aa;
       float fx = x + fx2, fy = y + fy2;
-      initialPos[i] = vec2f(fx * inv-halfw - 1f, (fy + ratioshift) * inv-halfw - 1f);
+      initialPos[i] = vec2f((fx - ratioshift) * inv-halfh - 1f, fy * inv-halfh - 1f);
       i++;
     }
     if (++x == width) { x = 0; y++; }
@@ -567,7 +624,7 @@ void calcSegment(int x, y, distance, width, height, int aa, Operator tree, gdIma
     // auto col = linear2gamma sum;
     auto col = sum;
     if (hsv) col = hsv2rgb col;
-    gdp.tpixels[y][width - 1 - x] = floatToIntColor col;
+    dg(x, y, floatToIntColor col);
     if (++x == width) { x = 0; y++; }
   }
   

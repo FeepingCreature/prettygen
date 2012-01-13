@@ -1,10 +1,10 @@
 module prettygen;
 
-import prettyops;
+import prettyops, std.random, std.fun;
 
 int rand() { return prettyops.rand(); }
 
-import std.time;
+import std.time, std.png, std.thread;
 
 string urlencode(string s) {
   return s
@@ -63,7 +63,7 @@ string readback(string cmd, string data) {
   return result[];
 }
 
-import std.thread, std.file, gd;
+import std.file, gd;
 extern(C) char* getenv(char*);
 extern(C) FILE* stdout, stderr;
 void main() {
@@ -77,7 +77,7 @@ void main() {
   define-exit "main-return" {
     return;
   }
-  initOps();
+  bool opsInited;
   string queryString = CToString getenv toStringz "QUERY_STRING";
   string SERVER_NAME = CToString getenv toStringz "SERVER_NAME";
   string SERVER_PORT = CToString getenv toStringz "SERVER_PORT";
@@ -101,10 +101,18 @@ void main() {
     }
     void initTree() {
       if (tree) return;
+      if (!opsInited) {
+        opsInited = true;
+        initOps();
+      }
       initRNG seed;
+      int range1 = 4, range2 = 12;
+      if (version_id >= 3) {
+        range1 = 8;
+      }
       do {
-        depth[0] = 2 + rand() % 4;
-        depth[1] = depth[0] + rand() % 9;
+        depth[0] = 2 + rand() % range1;
+        depth[1] = depth[0] + rand() % range2;
         tree = genTree(depth);
       } while (treeCost() > 256) { } // reject trees that are too expensive
     }
@@ -122,6 +130,7 @@ void main() {
       else if (auto rest = part.startsWith "hq") aa = 6;
       else if (auto rest = part.startsWith "aa=") aa = rest.atoi();
       else if (auto rest = part.startsWith "gif=") gifmode = rest.atoi();
+      else if (auto rest = part.startsWith "v=") version_id = rest.atoi();
       else if (auto rest = part.startsWith "treepath=") {
         if (!seed) raise new Error "Must define seed before treepath! ";
         initTree();
@@ -138,7 +147,9 @@ void main() {
   }
   string tree_graph() {
     int count;
+    (Operator, string)[auto~] namemap;
     (string, string) recurse(Operator op, string treepath = "") {
+      for auto entry <- refs namemap if int:(*entry)[0] == int:op return (string:null, (*entry)[1]);
       string nodename = "node_$(count++)";
       string res = "$nodename [label=\"$(op.name)\", fillcolor=\"#ffffff40\", style=filled]; \n";
       for (int i, Operator ch) <- zip(0..-1, op.childs) {
@@ -146,6 +157,7 @@ void main() {
         res ~= chtup[0];
         res ~= "$nodename -> $(chtup[1]); \n";
       }
+      namemap ~= (op, nodename);
       return (res, nodename);
     }
     string res = recurse tree #[0];
@@ -182,7 +194,7 @@ void main() {
     <title>Image with seed $seed</title>
     </head>
     <body>
-    Seed: $seed<br>
+    Seed: $seed, $(\\{if (hsv) return \"HSV\"; else return \"RGB\"; } #()) mode<br>
     <a href=\"?derivation$rest\">Derivation</a>&nbsp;
     <a href=\"?picture&hq$rest\">HQ</a>&nbsp;
     <a href=\"http://api.imgur.com/2/upload?url=$(\"http://$SERVER_NAME:$SERVER_PORT$SCRIPT_NAME?img$rest\".urlencode())\">Upload to imgur</a>
@@ -214,18 +226,22 @@ void main() {
     }
     char[auto~] extra_info;
     int count;
+    (Operator, string)[auto~] namemap;
     string recurse(Operator op, string treepath) {
+      for auto entry <- refs namemap if int:(*entry)[0] == int:op return (*entry)[1];
       string nodename = "node_$(count++)";
       auto pos = lookupNodePosition nodename;
-      string extra;
-      if (gifmode) extra = "&gif=$gifmode";
+      string prefix;
+      if (gifmode) prefix = "&gif=$gifmode";
+      if (version_id) prefix = "$(prefix)&v=$version_id";
       extra_info ~= "
         <a href=\"?picture$rest&treepath=$treepath\">
-        <img src=\"?img&seed=$seed&size=64&treepath=$treepath$extra\" style=\"position: absolute; left: $(pos[0] - 20)pt; top: $(graphsize[1] - pos[1] - 20)pt; \" />
+        <img src=\"?img$prefix&seed=$seed&size=64&treepath=$treepath\" style=\"position: absolute; left: $(pos[0] - 20)pt; top: $(graphsize[1] - pos[1] - 20)pt; \" />
         </a>";
       for (int i, Operator ch) <- zip(0..-1, op.childs) {
         string chname = recurse(ch, "$treepath$i-");
       }
+      namemap ~= (op, nodename);
       return nodename;
     }
     recurse (tree, treepath);
@@ -285,7 +301,7 @@ void main() {
         int y = i / linewidth;
         i -= y * linewidth;
         int x = i / aa2;
-        calcSegment(x, y, stepsize, size, aa, tree, gdp, offs, hsv => hsv);
+        calcSegment(x, y, stepsize, size, aa, tree, \(int x, y, col) { gdp.tpixels[y][size[0] - 1 - x] = col; }, offs, hsv => hsv);
       });
       auto stop = sec();
       // writeln "Time taken: $(float:(stop - start))";
@@ -293,6 +309,39 @@ void main() {
       // gdImagePng(gdp, c.gd.FILE*: hdl);
       // fclose hdl;
       return gdp;
+    }
+    // render and write to stdout
+    void streamImage() {
+      auto writer = new PNGWriter \(string s) { fwrite(s.ptr, s.length, 1, stdout); };
+      writer.configure size;
+      
+      auto res = new int[] (size[0] * size[1]);
+      int next-line;
+      auto lines-done = new bool[] size[1];
+      auto lock = new Mutex;
+      void flush() {
+        while (next-line < size[1] && lines-done[next-line]) {
+          auto line = next-line;
+          auto from = size[0] * line, to = size[0] * $ line + 1;
+          auto data = byte[]: res[from .. to];
+          writer.writeLine(data);
+          writer.flush;
+          next-line ++;
+        }
+      }
+      void updateProgress(int line) using autoLock lock {
+        lines-done[line] = true;
+        flush;
+      }
+      lp.runLoop(size[1], delegate void(int i, thr) {
+        int swap(int i) {
+          return ((i & 0x0ff_0000) >> 16) | ((i & 0x0000_00ff) << 16) | (i & 0xff00_ff00);
+        }
+        calcSegment(0, i, size[0] * aa * aa, size, aa, tree, \(int x, y, col) { res[y * size[0] + (size[0] - 1 - x)] = swap col; }, offs, hsv => hsv);
+        updateProgress(i);
+      });
+      flush;
+      writer.end;
     }
     if (gifmode) {
       writeln "Content-type: image/gif";
@@ -313,27 +362,45 @@ void main() {
     } else {
       writeln "Content-type: image/png";
       writeln "";
-      gdImagePng(auto gdp = genImage(), c.gd.FILE*:stdout);
-      gdImageDestroy gdp;
+      streamImage();
+      // gdImagePng(auto gdp = genImage(), c.gd.FILE*:stdout);
+      // gdImageDestroy gdp;
     }
     return;
   }
   
   int count = 64;
-  if (auto rest = queryString.startsWith "count=") { (string c, queryString) = rest.slice "&"; count = c.atoi(); }
+  auto parts = queryString.split "&";
+  for auto part <- parts {
+    if (auto rest = part.startsWith "count=") count = rest.atoi();
+    else if (auto rest = part.startsWith "v=") version_id = rest.atoi();
+    else writeln "Unknown argument: $part";
+  }
+  queryString = std.fun.select(parts, \(string s)-> !s.startsWith "count=") #.join "&";
   if (!queryString.startsWith "&" && queryString.length) queryString = "&$queryString";
   writeln "Content-type: text/html";
   writeln "";
   string img_gen() {
     char[auto~] res;
     long l = µsec();
-    initRNG *int*: &l;
-    for (int i = 0; i < count; ++i) {
-      auto newseed = rand();
-      res ~= "<div class=\"gallery_pic\"><a href=\"?picture&seed=$newseed$queryString\"><img width=128 height=128 src=\"?img&seed=$newseed&size=128\" /></a><br></div>";
+    auto seedrng = getPRNG *int*: &l;
+    initRNG seedrng.rand();
+    int i;
+    while (i < count) {
+      auto newseed = seedrng.rand();
+      tree = null;
+      parseParams "seed=$newseed";
+      if (tree.getFromDepth(0).length >= 5) {
+        string prefix;
+        if (version_id) prefix = "&v=$version_id";
+        res ~= "<div class=\"gallery_pic\"><a href=\"?picture&seed=$newseed$queryString\"><img width=128 height=128 src=\"?img$prefix&seed=$newseed&size=128\" /></a><br></div>";
+        i++;
+      }
     }
     return res[];
   }
+  string widthstr = "width: $((128+16)*7)px; ";
+  if (count > 64) widthstr = null;
   writeln "
   <html>
   <head>
@@ -344,7 +411,7 @@ void main() {
   </head>
   <body>
   Image!<br>
-  <div style=\"position: relative; width: $((128+16)*7)px; \">
+  <div style=\"position: relative; $widthstr\">
   $(img_gen())
   </div>
   </body>

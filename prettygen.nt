@@ -68,6 +68,7 @@ extern(C) char* getenv(char*);
 extern(C) FILE* stdout, stderr;
 void main() {
   delta = 0;
+  version_id = 2;
   set-handler(Error err) {
     writeln "Content-type: text/html";
     writeln "";
